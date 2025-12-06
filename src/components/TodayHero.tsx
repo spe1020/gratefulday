@@ -1,10 +1,17 @@
 import { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Check, Heart } from 'lucide-react';
+import { Check, Heart, Info } from 'lucide-react';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import type { DayInfo } from '@/lib/gratitudeUtils';
 import { getQuoteForDay, getAffirmationForDay, getWeekOfYear } from '@/lib/gratitudeUtils';
+import { GratitudeGiftModal } from './GratitudeGiftModal';
 
 interface TodayHeroProps {
   day: DayInfo;
@@ -17,6 +24,7 @@ export function TodayHero({ day, hasEntry, onOpenDetail, totalDays }: TodayHeroP
   const [isHovered, setIsHovered] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
   const [showCheckmark, setShowCheckmark] = useState(false);
+  const [giftModalOpen, setGiftModalOpen] = useState(false);
 
   const handleCardClick = () => {
     onOpenDetail(day);
@@ -241,8 +249,48 @@ export function TodayHero({ day, hasEntry, onOpenDetail, totalDays }: TodayHeroP
             </Button>
           </div>
 
+          {/* Gratitude Gift Section */}
+          <div className="mt-8 sm:mt-10 space-y-2">
+            <div className="flex items-center justify-center gap-2">
+              <Button
+                variant="outline"
+                size="lg"
+                onClick={() => setGiftModalOpen(true)}
+                className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/20 dark:to-orange-950/20 border-amber-300 dark:border-amber-700 hover:bg-gradient-to-r hover:from-amber-100 hover:to-orange-100 dark:hover:from-amber-900/30 dark:hover:to-orange-900/30 text-amber-900 dark:text-amber-100"
+              >
+                Send a Gratitude Gift
+              </Button>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                      aria-label="Learn more about gratitude gifts"
+                    >
+                      <Info className="h-4 w-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">
+                    <p className="text-sm">
+                      Send a small, anonymous gift of sats to a random person on Nostr. It's a quiet act of gratitude with no score, no identity, and no expectation.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+            <p className="text-xs text-center text-muted-foreground">
+              Quietly send a small gift of sats to someone on Nostr.
+            </p>
+          </div>
         </CardContent>
       </Card>
+
+      {/* Gratitude Gift Modal */}
+      <GratitudeGiftModal
+        open={giftModalOpen}
+        onOpenChange={setGiftModalOpen}
+      />
 
       {/* Confetti and Checkmark Animation Styles */}
       <style>{`
