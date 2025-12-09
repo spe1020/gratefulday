@@ -21,10 +21,10 @@ jobs:
         with:
           node-version: "22"
           
-      - name: Clean install dependencies
+      - name: Install dependencies
         run: |
-          rm -rf node_modules package-lock.json
-          npm install
+          rm -rf node_modules
+          npm ci
           
       - name: Run tests
         run: npm run test
