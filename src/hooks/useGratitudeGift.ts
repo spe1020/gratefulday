@@ -34,42 +34,15 @@ export function useGratitudeGift() {
   };
 
   /**
-   * Check if a user has sent a zap (kind 9734 zap request) within the last 24 hours
-   */
-  const hasSentZapRecently = async (pubkey: string): Promise<boolean> => {
-    try {
-      const oneDayAgo = Math.floor(Date.now() / 1000) - (24 * 60 * 60);
-      const signal = AbortSignal.timeout(3000);
-      
-      // Query for zap requests (kind 9734) sent by this user in the last 24 hours
-      const zapRequests = await nostr.query(
-        [{
-          kinds: [9734], // Zap request
-          authors: [pubkey],
-          since: oneDayAgo,
-          limit: 1
-        }],
-        { signal }
-      );
-
-      return zapRequests.length > 0;
-    } catch (error) {
-      // If we can't verify, assume they haven't sent a zap (conservative approach)
-      console.debug('Error checking zap history for', pubkey.substring(0, 8), error);
-      return false;
-    }
-  };
-
-  /**
    * Select a random active Nostr pubkey with lightning address and return profile event
    * Queries for random active users from recent events and verifies they have lightning addresses
-   * Also filters to only include users who have sent a zap in the last 24 hours
+   * Also filters to only include users who have sent a zap in the last 10 days
    */
   const selectRandomRecipient = async (): Promise<{ pubkey: string; profileEvent: any; profileData: any } | null> => {
     // Select random recipient from active users with lightning addresses
     try {
       // Query for recent kind 1 events and select a random author
-      const signal = AbortSignal.timeout(5000); // Increased timeout for profile checks
+      const signal = AbortSignal.timeout(5000);
       const recentEvents = await nostr.query(
         [{ kinds: [1], limit: 50 }],
         { signal }
@@ -84,7 +57,10 @@ export function useGratitudeGift() {
         new Set(recentEvents.map((e) => e.pubkey))
       ).filter((pk) => pk !== user?.pubkey); // Exclude current user
 
+      console.log(`[GratitudeGift] Found ${pubkeys.length} unique pubkeys from recent events`);
+
       if (pubkeys.length === 0) {
+        console.log('[GratitudeGift] No pubkeys found after filtering current user');
         return null;
       }
 
@@ -95,14 +71,16 @@ export function useGratitudeGift() {
         { signal: profileSignal }
       );
 
+      console.log(`[GratitudeGift] Fetched ${profileEvents.length} profiles`);
+
       // Create a map of pubkey -> profile event
       const profileMap = new Map<string, typeof profileEvents[0]>();
       profileEvents.forEach((event) => {
         profileMap.set(event.pubkey, event);
       });
 
-      // Check each pubkey for lightning address, filter bots, and verify zap activity
-      const validRecipients: Array<{ pubkey: string; profileEvent: any; profileData: any }> = [];
+      // First pass: filter by lightning address and bot status
+      const candidatesWithLightning: Array<{ pubkey: string; profileEvent: any; profileData: any }> = [];
       
       for (const pubkey of pubkeys) {
         const profileEvent = profileMap.get(pubkey);
@@ -115,25 +93,65 @@ export function useGratitudeGift() {
           const lightningAddress = profileData.lud16 || profileData.lud06;
           
           // Must have lightning address and not be a bot
-          if (!lightningAddress || isBot(profileData.nip05, lightningAddress)) {
-            continue;
+          if (lightningAddress && !isBot(profileData.nip05, lightningAddress)) {
+            candidatesWithLightning.push({ pubkey, profileEvent, profileData });
           }
-
-          // Check if user has sent a zap in the last 24 hours
-          const hasZapped = await hasSentZapRecently(pubkey);
-          if (!hasZapped) {
-            // Skip users who haven't sent a zap recently
-            continue;
-          }
-
-          validRecipients.push({ pubkey, profileEvent, profileData });
         } catch {
           // Invalid profile JSON, skip
           continue;
         }
       }
 
+      console.log(`[GratitudeGift] ${candidatesWithLightning.length} candidates with lightning addresses (after bot filtering)`);
+
+      if (candidatesWithLightning.length === 0) {
+        console.log('[GratitudeGift] No candidates with lightning addresses found');
+        return null;
+      }
+
+      // Batch check zap activity: query all zap requests from candidates in last 10 days
+      const tenDaysAgo = Math.floor(Date.now() / 1000) - (10 * 24 * 60 * 60);
+      const candidatePubkeys = candidatesWithLightning.map(c => c.pubkey);
+      
+      let usersWithZaps: Set<string>;
+      let zapCheckSuccessful = false;
+      try {
+        const zapSignal = AbortSignal.timeout(5000);
+        const zapRequests = await nostr.query(
+          [{
+            kinds: [9734], // Zap request
+            authors: candidatePubkeys,
+            since: tenDaysAgo,
+            limit: 1000 // Increased limit to catch more zaps
+          }],
+          { signal: zapSignal }
+        );
+
+        // Create a set of pubkeys who have sent zaps
+        usersWithZaps = new Set(zapRequests.map(z => z.pubkey));
+        zapCheckSuccessful = true;
+        console.log(`[GratitudeGift] Found ${usersWithZaps.size} users with zaps out of ${candidatePubkeys.length} candidates`);
+      } catch (error) {
+        console.error('Error checking zap activity:', error);
+        // If zap check fails, fall back to all candidates (don't filter by zap activity)
+        usersWithZaps = new Set(candidatePubkeys);
+        zapCheckSuccessful = false;
+      }
+
+      // Filter to only users who have sent zaps in the last 10 days
+      // If zap check returned no results but didn't error, also fall back to all candidates
+      let validRecipients = candidatesWithLightning.filter(
+        candidate => usersWithZaps.has(candidate.pubkey)
+      );
+
+      // If no users with zaps found, but we have candidates, use all candidates as fallback
+      if (validRecipients.length === 0 && candidatesWithLightning.length > 0) {
+        console.log(`[GratitudeGift] No users with recent zaps found, falling back to all ${candidatesWithLightning.length} candidates`);
+        validRecipients = candidatesWithLightning;
+      }
+
       if (validRecipients.length === 0) {
+        console.log('[GratitudeGift] No valid recipients found after all filtering');
         return null;
       }
 
