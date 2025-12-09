@@ -60,6 +60,7 @@ export function TestNpubGenerator() {
           pubkeysWithLightning: [],
           pubkeysWithoutLightning: [],
           selectedPubkey: null,
+          lastRecipient: getLastRecipient(),
           timestamp: new Date(),
         });
         setIsLoading(false);

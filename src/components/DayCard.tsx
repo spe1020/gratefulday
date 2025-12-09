@@ -1,11 +1,9 @@
 import { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Check, Lock, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { DayInfo } from '@/lib/gratitudeUtils';
-import { getQuoteForDay, getAffirmationForDay } from '@/lib/gratitudeUtils';
-import { DayDetailDialog } from './DayDetailDialog';
+import { getAffirmationForDay } from '@/lib/gratitudeUtils';
 
 interface DayCardProps {
   day: DayInfo;

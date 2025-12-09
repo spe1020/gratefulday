@@ -43,7 +43,7 @@ export function GratitudeGiftModal({ open, onOpenChange }: GratitudeGiftModalPro
   const [invoiceInfo, setInvoiceInfo] = useState<{
     invoice: string;
     zapEndpoint: string;
-    signedZapRequest: any;
+    signedZapRequest: unknown;
   } | null>(null);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const { sendGratitudeGift, verifyAndPublishPayment, isSending } = useGratitudeGift();

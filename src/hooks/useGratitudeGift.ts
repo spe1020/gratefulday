@@ -5,7 +5,9 @@ import { useNWC } from '@/hooks/useNWCContext';
 import { useToast } from '@/hooks/useToast';
 import { useAppContext } from '@/hooks/useAppContext';
 import { nip57 } from 'nostr-tools';
+import type { Event } from 'nostr-tools';
 import { useNostr } from '@nostrify/react';
+import type { NostrEvent } from '@nostrify/nostrify';
 import { isBot } from '@/lib/botDetection';
 import { openInvoiceInWalletApp, getWalletAppInfo } from '@/lib/walletApps';
 
@@ -15,7 +17,7 @@ import { openInvoiceInWalletApp, getWalletAppInfo } from '@/lib/walletApps';
 export function useGratitudeGift() {
   const [isSending, setIsSending] = useState(false);
   const { user } = useCurrentUser();
-  const { webln, activeNWC } = useWallet();
+  const { webln } = useWallet();
   const { sendPayment, getActiveConnection } = useNWC();
   const { toast } = useToast();
   const { config } = useAppContext();
@@ -24,9 +26,9 @@ export function useGratitudeGift() {
   /**
    * Helper function to publish zap request to relays (non-blocking)
    */
-  const publishZapRequest = async (zapRequest: any) => {
+  const publishZapRequest = async (zapRequest: unknown) => {
     try {
-      await nostr.event(zapRequest, { signal: AbortSignal.timeout(5000) });
+      await nostr.event(zapRequest as NostrEvent, { signal: AbortSignal.timeout(5000) });
     } catch (error) {
       // Payment succeeded but publishing failed - log but don't fail
       console.warn('Payment succeeded but failed to publish zap request to relays:', error);
@@ -73,7 +75,7 @@ export function useGratitudeGift() {
    * Also filters to only include users who have sent a zap in the last 10 days
    * Excludes the last recipient to avoid zapping the same person twice in a row
    */
-  const selectRandomRecipient = async (excludePubkey?: string | null): Promise<{ pubkey: string; profileEvent: any; profileData: any } | null> => {
+  const selectRandomRecipient = async (excludePubkey?: string | null): Promise<{ pubkey: string; profileEvent: unknown; profileData: unknown } | null> => {
     // Select random recipient from active users with lightning addresses
     try {
       // Get recent recipients to exclude (last 5 to ensure variety)
@@ -130,7 +132,7 @@ export function useGratitudeGift() {
       });
 
       // First pass: filter by lightning address and bot status
-      const candidatesWithLightning: Array<{ pubkey: string; profileEvent: any; profileData: any }> = [];
+      const candidatesWithLightning: Array<{ pubkey: string; profileEvent: unknown; profileData: unknown }> = [];
       
       for (const pubkey of pubkeys) {
         const profileEvent = profileMap.get(pubkey);
@@ -162,7 +164,6 @@ export function useGratitudeGift() {
       // Use all candidates - we don't filter by zap activity anymore
       // Zap activity detection is unreliable and was limiting the pool too much
       const candidatePubkeys = candidatesWithLightning.map(c => c.pubkey);
-      let usersWithZaps: Set<string> = new Set(); // Empty set - zap activity not used for filtering
       
       // Try to detect zap activity for logging/info only (non-blocking, don't wait for it)
       // This runs in the background and doesn't affect selection
@@ -186,7 +187,7 @@ export function useGratitudeGift() {
       });
 
       // Use all candidates - no zap filtering
-      let validRecipients = candidatesWithLightning;
+      const validRecipients = candidatesWithLightning;
       console.log(`[GratitudeGift] Using all ${validRecipients.length} candidates (no zap filtering)`);
 
       // If we excluded recent recipients and now have no valid recipients, 
@@ -251,7 +252,7 @@ export function useGratitudeGift() {
         // This is a simplified check - full BOLT11 decoding would be more robust
         const paymentHashMatch = invoice.match(/lnbc\d+[munp]?1[^1]*1([a-z0-9]{64})/i);
         if (paymentHashMatch) {
-          const paymentHash = paymentHashMatch[1];
+          const _paymentHash = paymentHashMatch[1];
           // Some services allow checking payment hash status
           // This is service-dependent and may not work for all providers
         }
@@ -281,7 +282,7 @@ export function useGratitudeGift() {
   const sendGratitudeGift = async (
     amount: number, 
     message?: string
-  ): Promise<{ success: boolean; invoice?: string; zapEndpoint?: string; signedZapRequest?: any }> => {
+  ): Promise<{ success: boolean; invoice?: string; zapEndpoint?: string; signedZapRequest?: unknown }> => {
     if (!user) {
       toast({
         title: 'Login required',
@@ -316,14 +317,13 @@ export function useGratitudeGift() {
         return { success: false };
       }
 
-      const { pubkey: recipientPubkey, profileEvent, profileData } = recipient;
+      const { pubkey: recipientPubkey, profileEvent } = recipient;
       
       // Save this recipient to recent recipients list to avoid zapping them again soon
       saveRecentRecipient(recipientPubkey);
-      const lightningAddress = profileData.lud16 || profileData.lud06;
 
       // Get zap endpoint
-      const zapEndpoint = await nip57.getZapEndpoint(profileEvent);
+      const zapEndpoint = await nip57.getZapEndpoint(profileEvent as Event);
       if (!zapEndpoint) {
         toast({
           title: 'Zap endpoint not found',
@@ -459,7 +459,7 @@ export function useGratitudeGift() {
   const verifyAndPublishPayment = async (
     invoice: string,
     zapEndpoint: string,
-    signedZapRequest: any,
+    signedZapRequest: unknown,
     forcePublish: boolean = false
   ): Promise<boolean> => {
     try {

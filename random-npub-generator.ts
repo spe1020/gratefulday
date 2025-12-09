@@ -272,7 +272,7 @@ export class RandomNpubGenerator {
  * Helper function to encode pubkey to npub format
  * Requires: import { nip19 } from 'nostr-tools';
  */
-export function encodeNpub(pubkey: string): string {
+export function encodeNpub(_pubkey: string): string {
   // This requires nostr-tools - included as a comment for reference
   // import { nip19 } from 'nostr-tools';
   // return nip19.npubEncode(pubkey);

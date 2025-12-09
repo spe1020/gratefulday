@@ -9,8 +9,6 @@ import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useGratitudeEntries } from '@/hooks/useGratitudeEntries';
 import {
   getAllDaysInYear,
-  getDayOfYear,
-  getTotalDaysInYear,
 } from '@/lib/gratitudeUtils';
 import { Logo } from '@/components/Logo';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -19,7 +17,7 @@ import { GratitudeGiftModal } from '@/components/GratitudeGiftModal';
 import { LibraryComingSoonModal } from '@/components/LibraryComingSoonModal';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
-import { Menu, X } from 'lucide-react';
+import { Menu } from 'lucide-react';
 
 export default function Index() {
   useHead({
@@ -44,8 +42,6 @@ export default function Index() {
 
   const today = new Date();
   const currentYear = today.getFullYear();
-  const currentDayOfYear = getDayOfYear(today);
-  const totalDays = getTotalDaysInYear(currentYear);
 
   // Handle header shadow on scroll
   useEffect(() => {

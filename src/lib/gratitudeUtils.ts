@@ -95,7 +95,6 @@ export function isFuture(date: Date): boolean {
  */
 export function getAllDaysInYear(year: number): DayInfo[] {
   const totalDays = getTotalDaysInYear(year);
-  const today = new Date();
   const days: DayInfo[] = [];
 
   for (let dayOfYear = 1; dayOfYear <= totalDays; dayOfYear++) {

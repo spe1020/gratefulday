@@ -45,7 +45,6 @@ export function CalendarView({ days, entriesByDate }: CalendarViewProps) {
         {/* Today Hero - Large, centered, prominent */}
         <TodayHero
           day={today}
-          hasEntry={entriesByDate.get(today.dateString) || false}
           onOpenDetail={handleOpenDetail}
           totalDays={totalDays}
         />

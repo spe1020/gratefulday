@@ -187,8 +187,6 @@ https://gratefulday.space`;
     );
   };
 
-  const canShare = gratitudeText.trim().length > 0;
-
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>

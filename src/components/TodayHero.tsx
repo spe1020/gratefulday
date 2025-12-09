@@ -4,17 +4,16 @@ import { Button } from '@/components/ui/button';
 import { Check, Heart } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { DayInfo } from '@/lib/gratitudeUtils';
-import { getQuoteForDay, getAffirmationForDay, getWeekOfYear } from '@/lib/gratitudeUtils';
+import { getQuoteForDay, getAffirmationForDay } from '@/lib/gratitudeUtils';
 
 interface TodayHeroProps {
   day: DayInfo;
-  hasEntry: boolean;
   onOpenDetail: (day: DayInfo) => void;
   totalDays: number;
 }
 
-export function TodayHero({ day, hasEntry, onOpenDetail, totalDays }: TodayHeroProps) {
-  const [isHovered, setIsHovered] = useState(false);
+export function TodayHero({ day, onOpenDetail, totalDays }: TodayHeroProps) {
+  const [_isHovered, setIsHovered] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
   const [showCheckmark, setShowCheckmark] = useState(false);
 
@@ -41,7 +40,6 @@ export function TodayHero({ day, hasEntry, onOpenDetail, totalDays }: TodayHeroP
 
   const quote = getQuoteForDay(day.dayOfYear);
   const affirmation = getAffirmationForDay(day.dayOfYear);
-  const weekOfYear = getWeekOfYear(day.date);
   
   // Calculate progress for text display
   const progress = (day.dayOfYear / totalDays) * 100;
