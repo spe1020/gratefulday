@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Loader2, RefreshCw, Copy, Check, Zap, ZapOff, Bot } from 'lucide-react';
 import { nip19 } from 'nostr-tools';
 import { cn } from '@/lib/utils';
+import { isBot } from '@/lib/botDetection';
 
 /**
  * Dev-only test page for testing the random npub generator
@@ -23,23 +24,24 @@ export function TestNpubGenerator() {
       lightningAddress: string; 
       nip05?: string;
       isBot: boolean;
+      hasZapped: boolean;
     }>;
     pubkeysWithoutLightning: string[];
     selectedPubkey: string | null;
+    lastRecipient: string | null;
     timestamp: Date;
   } | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   /**
-   * Check if a profile is a bot by looking for "bot" or "news" in nip05 or lightning address
-   * Accounts with "news" in NIP-05 are treated as bots
+   * Get the last recipient pubkey from localStorage
    */
-  const isBot = (nip05?: string, lightningAddress?: string): boolean => {
-    const nip05Lower = nip05?.toLowerCase() || '';
-    const lightningLower = lightningAddress?.toLowerCase() || '';
-    return nip05Lower.includes('bot') || 
-           nip05Lower.includes('news') || 
-           lightningLower.includes('bot');
+  const getLastRecipient = (): string | null => {
+    try {
+      return localStorage.getItem('gratitudeGift_lastRecipient');
+    } catch {
+      return null;
+    }
   };
 
   const testGenerator = async () => {
@@ -65,9 +67,16 @@ export function TestNpubGenerator() {
       }
 
       // Get unique pubkeys from recent events
+      const lastRecipient = getLastRecipient();
       const pubkeys = Array.from(
         new Set(recentEvents.map((e) => e.pubkey))
-      ).filter((pk) => pk !== user?.pubkey); // Exclude current user
+      ).filter((pk) => {
+        // Exclude current user
+        if (pk === user?.pubkey) return false;
+        // Exclude last recipient to avoid zapping same person twice in a row
+        if (lastRecipient && pk === lastRecipient) return false;
+        return true;
+      });
 
       if (pubkeys.length === 0) {
         setResults({
@@ -75,6 +84,7 @@ export function TestNpubGenerator() {
           pubkeysWithLightning: [],
           pubkeysWithoutLightning: [],
           selectedPubkey: null,
+          lastRecipient,
           timestamp: new Date(),
         });
         setIsLoading(false);
@@ -87,6 +97,7 @@ export function TestNpubGenerator() {
         lightningAddress: string; 
         nip05?: string;
         isBot: boolean;
+        hasZapped: boolean;
       }> = [];
       const pubkeysWithoutLightning: string[] = [];
 
@@ -103,7 +114,7 @@ export function TestNpubGenerator() {
         profileMap.set(event.pubkey, event);
       });
 
-      // Check each pubkey for lightning address and bot status
+      // First pass: filter by lightning address and bot status
       for (const pubkey of pubkeys) {
         const profileEvent = profileMap.get(pubkey);
         if (!profileEvent) {
@@ -122,7 +133,8 @@ export function TestNpubGenerator() {
               pubkey, 
               lightningAddress, 
               nip05,
-              isBot: botStatus 
+              isBot: botStatus,
+              hasZapped: false // Will be updated below
             });
           } else {
             pubkeysWithoutLightning.push(pubkey);
@@ -133,11 +145,49 @@ export function TestNpubGenerator() {
         }
       }
 
-      // Select random pubkey from those with lightning addresses
+      // Batch check zap activity: query all zap requests from candidates in last 10 days
+      const tenDaysAgo = Math.floor(Date.now() / 1000) - (10 * 24 * 60 * 60);
+      const candidatePubkeys = pubkeysWithLightning.map(c => c.pubkey);
+      
+      let usersWithZaps: Set<string> = new Set();
+      try {
+        const zapSignal = AbortSignal.timeout(5000);
+        const zapRequests = await nostr.query(
+          [{
+            kinds: [9734], // Zap request
+            authors: candidatePubkeys,
+            since: tenDaysAgo,
+            limit: 1000
+          }],
+          { signal: zapSignal }
+        );
+
+        // Create a set of pubkeys who have sent zaps
+        usersWithZaps = new Set(zapRequests.map(z => z.pubkey));
+      } catch (error) {
+        console.error('Error checking zap activity:', error);
+      }
+
+      // Update hasZapped status for each candidate
+      pubkeysWithLightning.forEach(candidate => {
+        candidate.hasZapped = usersWithZaps.has(candidate.pubkey);
+      });
+
+      // Filter to only users who have sent zaps in the last 10 days (preference, not requirement)
+      let validRecipients = pubkeysWithLightning.filter(
+        candidate => usersWithZaps.has(candidate.pubkey)
+      );
+
+      // If no users with zaps found, but we have candidates, use all candidates as fallback
+      if (validRecipients.length === 0 && pubkeysWithLightning.length > 0) {
+        validRecipients = pubkeysWithLightning;
+      }
+
+      // Select random pubkey from valid recipients
       let selectedPubkey: string | null = null;
-      if (pubkeysWithLightning.length > 0) {
-        const randomIndex = Math.floor(Math.random() * pubkeysWithLightning.length);
-        selectedPubkey = pubkeysWithLightning[randomIndex].pubkey;
+      if (validRecipients.length > 0) {
+        const randomIndex = Math.floor(Math.random() * validRecipients.length);
+        selectedPubkey = validRecipients[randomIndex].pubkey;
       }
 
       setResults({
@@ -145,6 +195,7 @@ export function TestNpubGenerator() {
         pubkeysWithLightning,
         pubkeysWithoutLightning,
         selectedPubkey,
+        lastRecipient,
         timestamp: new Date(),
       });
     } catch (error) {
@@ -154,6 +205,7 @@ export function TestNpubGenerator() {
         pubkeysWithLightning: [],
         pubkeysWithoutLightning: [],
         selectedPubkey: null,
+        lastRecipient: getLastRecipient(),
         timestamp: new Date(),
       });
     } finally {
@@ -248,10 +300,19 @@ export function TestNpubGenerator() {
                     <Badge variant="outline" className="bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border-blue-300 dark:border-blue-700">
                       {results.pubkeysWithLightning.filter(p => !p.isBot).length} Humans
                     </Badge>
+                    <Badge variant="outline" className="bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border-yellow-300 dark:border-yellow-700">
+                      <Zap className="h-3 w-3 mr-1" />
+                      {results.pubkeysWithLightning.filter(p => p.hasZapped).length} with Recent Zaps
+                    </Badge>
                     <Badge variant="outline" className="bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-700">
                       <ZapOff className="h-3 w-3 mr-1" />
                       {results.pubkeysWithoutLightning.length} without Lightning
                     </Badge>
+                    {results.lastRecipient && (
+                      <Badge variant="outline" className="bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 border-orange-300 dark:border-orange-700">
+                        Last: {formatPubkey(results.lastRecipient).substring(0, 12)}...
+                      </Badge>
+                    )}
                   </div>
                   {results.selectedPubkey && (
                     <div className="p-4 rounded-lg bg-amber-100 dark:bg-amber-900/30 border-2 border-amber-400 dark:border-amber-600">
@@ -417,6 +478,18 @@ export function TestNpubGenerator() {
                                   <Badge variant="outline" className="text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 border-green-300 dark:border-green-700 flex-shrink-0">
                                     {item.lightningAddress}
                                   </Badge>
+                                  {item.hasZapped && (
+                                    <Badge variant="outline" className="text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border-yellow-300 dark:border-yellow-700 flex-shrink-0">
+                                      <Zap className="h-3 w-3 mr-1" />
+                                      Zapped
+                                    </Badge>
+                                  )}
+                                  {!item.hasZapped && (
+                                    <Badge variant="outline" className="text-xs bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 border-gray-300 dark:border-gray-700 flex-shrink-0">
+                                      <ZapOff className="h-3 w-3 mr-1" />
+                                      No Zap
+                                    </Badge>
+                                  )}
                                   {item.nip05 && (
                                     <Badge variant="outline" className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border-blue-300 dark:border-blue-700 flex-shrink-0">
                                       {item.nip05}
@@ -505,10 +578,16 @@ export function TestNpubGenerator() {
               5. Excludes pubkeys without lightning addresses
             </p>
             <p>
-              6. Identifies bots by checking if "bot" or "news" appears in NIP-05, or "bot" in lightning address (kept in pool)
+              6. Identifies bots by checking if "bot" or "news" appears in NIP-05, or "bot" in lightning address
             </p>
             <p>
-              7. Randomly selects one pubkey from those with lightning addresses (bots included)
+              7. Checks if users have sent a zap (kind 9734) in the last 10 days (preference, not requirement)
+            </p>
+            <p>
+              8. Excludes the last recipient to avoid zapping the same person twice in a row
+            </p>
+            <p>
+              9. Randomly selects one pubkey from valid candidates (prefers users with recent zaps, falls back to all if none found)
             </p>
             <p className="pt-2 text-xs">
               This is the same logic used by the "Send a Gratitude Gift" feature.
