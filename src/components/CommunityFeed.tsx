@@ -9,6 +9,8 @@ import { useAuthor } from '@/hooks/useAuthor';
 import { genUserName } from '@/lib/genUserName';
 import type { NostrEvent, NostrMetadata } from '@nostrify/nostrify';
 
+import { NoteContentWithMentions } from './NoteContentWithMentions';
+
 function GratitudePost({ event }: { event: NostrEvent }) {
   const author = useAuthor(event.pubkey);
   const metadata: NostrMetadata | undefined = author.data?.metadata;
@@ -44,9 +46,7 @@ function GratitudePost({ event }: { event: NostrEvent }) {
         </div>
       </CardHeader>
       <CardContent className="pt-0">
-        <p className="text-sm text-foreground/90 whitespace-pre-wrap break-words line-clamp-4">
-          {event.content}
-        </p>
+        <NoteContentWithMentions content={event.content} />
       </CardContent>
     </Card>
   );

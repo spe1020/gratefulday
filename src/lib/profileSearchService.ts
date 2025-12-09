@@ -1,62 +1,42 @@
 
 import { useNostr } from '@nostrify/react';
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { nip19 } from 'nostr-tools';
+import { getPrimalCache } from './primalCache';
 
 type User = {
   name: string;
   picture: string;
   pubkey: string;
+  nip05?: string;
 };
 
 export const useProfileSearchService = () => {
-  const { nostr, relays: defaultRelays } = useNostr();
+  const { nostr } = useNostr();
+  const primalCache = useRef(getPrimalCache());
 
   const searchProfiles = useCallback(async (query: string): Promise<User[]> => {
     if (query.length < 2) {
       return [];
     }
 
-    const combinedUsers: User[] = [];
+    try {
+      // Use Primal cache for fast, reliable search
+      const profiles = await primalCache.current.searchProfiles(query, 10);
 
-    const allRelays = Array.from(new Set([
-      ...(defaultRelays || []).map(r => r.url),
-    ]));
-
-    const events = await nostr.query(
-      [
-        {
-          kinds: [0],
-          search: query,
-          limit: 10,
-        },
-      ],
-      {
-        relays: allRelays,
-      }
-    );
-
-    for (const event of events) {
-      try {
-        const metadata = JSON.parse(event.content);
-        if (metadata.name) {
-          combinedUsers.push({
-            name: metadata.name,
-            picture: metadata.picture,
-            pubkey: event.pubkey,
-          });
-        }
-      } catch (e) {
-        console.error('Error parsing metadata', e);
-      }
+      return profiles
+        .filter(p => p.name || p.display_name) // Only include profiles with names
+        .map(p => ({
+          name: p.display_name || p.name || '',
+          picture: p.picture || '',
+          pubkey: p.pubkey,
+          nip05: p.nip05,
+        }));
+    } catch (error) {
+      console.error('Error searching profiles via Primal:', error);
+      return [];
     }
-
-    const uniqueUsers = Array.from(new Set(combinedUsers.map((u) => u.pubkey))).map((pubkey) => {
-      return combinedUsers.find((u) => u.pubkey === pubkey)!;
-    });
-
-    return uniqueUsers;
-  }, [nostr, defaultRelays]);
+  }, []);
 
   const fetchProfile = useCallback(async (pubkey: string): Promise<User | null> => {
     const events = await nostr.query(
@@ -98,7 +78,7 @@ export const useProfileSearchService = () => {
         return { pubkey, relays: relays || [] };
       }
     } catch (e) {
-      console.error('Error parsing identifier', e);
+      // Silently ignore invalid identifiers (incomplete or malformed)
     }
     return null;
   };
