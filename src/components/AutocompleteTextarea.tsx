@@ -154,7 +154,11 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
       const query = atMatch[1].replace(/[.-]+$/, '');
 
       // Skip if query is empty after trimming
-      if (!query) return;
+      if (!query) {
+        setShowDropdown(false);
+        setSuggestions([]);
+        return;
+      }
 
       // Check if it's already a valid nostr identifier (must be complete)
 
@@ -214,6 +218,10 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
         }, 500);
 
+      } else {
+        // Query too short or doesn't meet criteria
+        setShowDropdown(false);
+        setSuggestions([]);
       }
 
     }
