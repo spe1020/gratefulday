@@ -87,7 +87,7 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
     // Match @username, @npub1..., @nprofile1..., nostr:npub1..., or nostr:nprofile1...
 
-    const atMatch = textBeforeCursor.match(/@([\w]+)$/);
+    const atMatch = textBeforeCursor.match(/@([\w.-]+)$/);
 
     const nostrMatch = textBeforeCursor.match(/nostr:(npub1[\w]+|nprofile1[\w]+)$/);
 
@@ -315,11 +315,11 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
 
 
-      
 
 
 
-      const atMatch = textBeforeCursor.match(/@([\w]+)$/);
+
+      const atMatch = textBeforeCursor.match(/@([\w.-]+)$/);
 
 
 
