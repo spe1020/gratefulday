@@ -261,9 +261,7 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
     let text = '';
 
-    const nodes = Array.from(element.childNodes);
-
-    nodes.forEach((node, index) => {
+    element.childNodes.forEach(node => {
 
       if (node.nodeType === Node.TEXT_NODE) {
 
@@ -276,24 +274,6 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
         if (el.dataset.mention) {
 
           text += el.dataset.mention;
-
-          // Check if next node exists and is text that doesn't start with whitespace
-
-          const nextNode = nodes[index + 1];
-
-          if (nextNode && nextNode.nodeType === Node.TEXT_NODE) {
-
-            const nextText = nextNode.textContent || '';
-
-            // If next text doesn't start with whitespace, add a space
-
-            if (nextText && !/^\s/.test(nextText)) {
-
-              text += ' ';
-
-            }
-
-          }
 
         } else {
 
