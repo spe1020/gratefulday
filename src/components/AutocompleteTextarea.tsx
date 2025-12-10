@@ -282,14 +282,32 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
         if (el.dataset.mention) {
           text += el.dataset.mention;
         } else {
-          // Recursively process child nodes
-          el.childNodes.forEach(child => processNode(child));
+          // Handle line breaks
+          const tagName = el.tagName.toLowerCase();
+          if (tagName === 'br') {
+            text += '\n';
+          } else if (tagName === 'div' || tagName === 'p') {
+            // Add newline before block elements (except the first one)
+            if (text.length > 0 && !text.endsWith('\n')) {
+              text += '\n';
+            }
+            // Recursively process child nodes
+            el.childNodes.forEach(child => processNode(child));
+            // Add newline after block elements if there's content
+            if (el.childNodes.length > 0) {
+              text += '\n';
+            }
+          } else {
+            // Recursively process child nodes for other elements
+            el.childNodes.forEach(child => processNode(child));
+          }
         }
       }
     };
 
     element.childNodes.forEach(processNode);
-    return text;
+    // Clean up multiple consecutive newlines (but preserve double newlines for paragraph breaks)
+    return text.replace(/\n{3,}/g, '\n\n').trimEnd();
   };
 
 
