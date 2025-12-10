@@ -56,7 +56,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   }
 
   return (
-    <NostrContext.Provider value={{ nostr: pool.current, relays: config.relayMetadata.relays }}>
+    <NostrContext.Provider value={{ nostr: pool.current }}>
       {children}
     </NostrContext.Provider>
   );

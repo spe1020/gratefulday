@@ -21,11 +21,12 @@ export const useMentionProfiles = (text: string) => {
               setMentionedProfiles(prev => new Map(prev).set(mention, profile));
             }
           }
-        } catch (error) {
+        } catch {
           // Silently ignore parsing errors
         }
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text, fetchProfile, parseIdentifier]);
 
   return mentionedProfiles;

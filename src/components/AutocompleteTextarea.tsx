@@ -52,7 +52,9 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
         }
         return;
       }
-      node = node.parentNode as Node | null;
+      const parent = node.parentNode;
+      if (!parent) break;
+      node = parent;
     }
   };
 
@@ -139,10 +141,8 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
           }
 
-        } catch (error) {
-
+        } catch {
           // Invalid identifier, ignore
-
         }
 
       }
@@ -189,10 +189,8 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
           }
 
-        } catch (error) {
-
+        } catch {
           // Invalid identifier, ignore
-
         }
 
       } else if (query.length >= 2 && !query.startsWith('npub1') && !query.startsWith('nprofile1')) {
@@ -473,7 +471,7 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
 
 
-          handleInput({ currentTarget: contentEditableRef.current } as any);
+          handleInput({ currentTarget: contentEditableRef.current } as React.FormEvent<HTMLDivElement>);
 
 
 
@@ -515,7 +513,7 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
             e.preventDefault();
             nextSibling.remove();
             if (contentEditableRef.current) {
-              handleInput({ currentTarget: contentEditableRef.current } as any);
+              handleInput({ currentTarget: contentEditableRef.current } as React.FormEvent<HTMLDivElement>);
             }
             return;
           }
@@ -543,7 +541,7 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
           e.preventDefault();
           mentionElement.remove();
           if (contentEditableRef.current) {
-            handleInput({ currentTarget: contentEditableRef.current } as any);
+            handleInput({ currentTarget: contentEditableRef.current } as React.FormEvent<HTMLDivElement>);
           }
           return;
         }
@@ -558,7 +556,7 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
             e.preventDefault();
             prevSibling.remove();
             if (contentEditableRef.current) {
-              handleInput({ currentTarget: contentEditableRef.current } as any);
+              handleInput({ currentTarget: contentEditableRef.current } as React.FormEvent<HTMLDivElement>);
             }
             return;
           }
@@ -582,79 +580,6 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
 
 
-  const renderTextWithMentions = () => {
-
-    if (!value) return '';
-
-
-
-    const parts: (React.ReactNode | string)[] = [];
-
-    let lastIndex = 0;
-
-    const mentionRegex = /nostr:(npub1[a-z0-9]{58,}|nprofile1[a-z0-9]{58,})/g;
-
-    let match: RegExpExecArray | null;
-
-
-
-    while ((match = mentionRegex.exec(value)) !== null) {
-
-      const fullMention = match[0];
-
-      const beforeText = value.substring(lastIndex, match.index);
-
-
-
-      if (beforeText) {
-
-        parts.push(beforeText);
-
-      }
-
-
-
-      const profile = mentionedProfiles.get(fullMention);
-
-      parts.push(
-
-        <span
-
-          contentEditable={false}
-
-          key={`mention-${match.index}`}
-
-          data-mention={fullMention}
-
-          className="inline-flex items-center gap-1 bg-primary/10 text-primary px-2 py-0.5 rounded-md font-medium"
-
-        >
-
-          @{profile?.name || fullMention.substring(6, 16) + '...'}
-
-        </span>
-
-      );
-
-
-
-      lastIndex = match.index + fullMention.length;
-
-    }
-
-
-
-    if (lastIndex < value.length) {
-
-      parts.push(value.substring(lastIndex));
-
-    }
-
-    
-
-    return ReactDOMServer.renderToStaticMarkup(<>{parts.map(p => typeof p === 'string' ? p : <>{p}</>)}</>);
-
-  };
 
 
 
@@ -673,12 +598,9 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
               onBeforeInput={handleBeforeInput}
 
               contentEditable={true}
-
-        className="relative font-mono text-sm p-2 border rounded-md min-h-[80px]"
-
-        placeholder="Share what you're grateful for..."
-
-      />
+              className="relative font-mono text-sm p-2 border rounded-md min-h-[80px]"
+              data-placeholder="Share what you're grateful for..."
+            />
 
 
 

@@ -77,7 +77,7 @@ export const useProfileSearchService = () => {
         const { pubkey, relays } = data as { pubkey: string, relays?: string[] };
         return { pubkey, relays: relays || [] };
       }
-    } catch (e) {
+    } catch {
       // Silently ignore invalid identifiers (incomplete or malformed)
     }
     return null;

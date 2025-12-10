@@ -93,7 +93,7 @@ export class PrimalCacheService {
     }
   }
 
-  private handleMessage(data: any) {
+  private handleMessage(data: unknown) {
     if (!Array.isArray(data) || data.length < 2) return;
 
     const [messageType, requestId, ...rest] = data;
