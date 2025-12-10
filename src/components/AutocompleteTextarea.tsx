@@ -422,7 +422,7 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
 
 
-            const space = document.createTextNode('  '); // Two spaces
+            const space = document.createTextNode(' '); // Single space
 
 
 
