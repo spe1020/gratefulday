@@ -268,36 +268,27 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
 
 
-  const htmlToPlainText = (element: Node) => {
-
+  const htmlToPlainText = (element: Node): string => {
     let text = '';
 
-    element.childNodes.forEach(node => {
-
+    const processNode = (node: Node) => {
       if (node.nodeType === Node.TEXT_NODE) {
-
-        text += node.textContent;
-
+        text += node.textContent || '';
       } else if (node.nodeType === Node.ELEMENT_NODE) {
-
         const el = node as HTMLElement;
-
+        
+        // Check if this element has a mention attribute
         if (el.dataset.mention) {
-
           text += el.dataset.mention;
-
         } else {
-
-          text += el.textContent;
-
+          // Recursively process child nodes
+          el.childNodes.forEach(child => processNode(child));
         }
-
       }
+    };
 
-    });
-
+    element.childNodes.forEach(processNode);
     return text;
-
   };
 
 

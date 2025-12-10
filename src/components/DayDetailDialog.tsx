@@ -16,11 +16,36 @@ import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useGratitudeEntry } from '@/hooks/useGratitudeEntries';
 import { useToast } from '@/hooks/useToast';
 import LoginDialog from './auth/LoginDialog';
+import { nip19 } from 'nostr-tools';
 
 interface DayDetailDialogProps {
   day: DayInfo | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+}
+
+/**
+ * Extracts all mentioned pubkeys from text containing nostr:npub... mentions
+ * Returns an array of unique pubkeys
+ */
+function extractMentionedPubkeys(text: string): string[] {
+  const mentionRegex = /nostr:(npub1[a-z0-9]{58,})/g;
+  const pubkeys = new Set<string>();
+  let match: RegExpExecArray | null;
+
+  while ((match = mentionRegex.exec(text)) !== null) {
+    try {
+      const npub = match[1];
+      const decoded = nip19.decode(npub);
+      if (decoded.type === 'npub') {
+        pubkeys.add(decoded.data as string);
+      }
+    } catch {
+      // Invalid npub, skip
+    }
+  }
+
+  return Array.from(pubkeys);
 }
 
 export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProps) {
@@ -146,16 +171,22 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
 
 https://gratefulday.space`;
 
+          // Extract mentioned pubkeys and add p tags for proper mention parsing
+          const mentionedPubkeys = extractMentionedPubkeys(trimmedText);
+          const tags: string[][] = [
+            ['t', 'gratefulday'],
+            ['t', 'gratefuldayspace'],
+            ['d', day.dateString],
+            ['day', String(day.dayOfYear)],
+            // Add p tags for each mentioned user (required by NIP-27)
+            ...mentionedPubkeys.map(pubkey => ['p', pubkey] as [string, string]),
+          ];
+
           publishNote(
             {
               kind: 1,
               content: noteContent,
-              tags: [
-                ['t', 'gratefulday'],
-                ['t', 'gratefuldayspace'],
-                ['d', day.dateString],
-                ['day', String(day.dayOfYear)],
-              ],
+              tags,
             },
             {
               onSuccess: () => {
