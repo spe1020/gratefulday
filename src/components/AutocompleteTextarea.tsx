@@ -567,17 +567,20 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
       }
     }
 
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setHighlightedIndex((prev) => (prev < suggestions.length - 1 ? prev + 1 : prev));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : prev));
-    } else if (e.key === 'Enter' && highlightedIndex > -1) {
-      e.preventDefault();
-      handleUserSelect(suggestions[highlightedIndex]);
-    } else if (e.key === 'Escape') {
-      setShowDropdown(false);
+    // Only handle arrow keys and Enter when dropdown is showing
+    if (showDropdown) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setHighlightedIndex((prev) => (prev < suggestions.length - 1 ? prev + 1 : prev));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : prev));
+      } else if (e.key === 'Enter' && highlightedIndex > -1) {
+        e.preventDefault();
+        handleUserSelect(suggestions[highlightedIndex]);
+      } else if (e.key === 'Escape') {
+        setShowDropdown(false);
+      }
     }
   };
 
