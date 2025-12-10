@@ -17,12 +17,8 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   // Create NPool instance only once
   const pool = useRef<NPool | undefined>(undefined);
 
-  // Use refs so the pool always has the latest data
-  const relayMetadata = useRef(config.relayMetadata);
-
   // Invalidate Nostr queries when relay metadata changes
   useEffect(() => {
-    relayMetadata.current = config.relayMetadata;
     queryClient.invalidateQueries({ queryKey: ['nostr'] });
   }, [config.relayMetadata, queryClient]);
 
@@ -36,7 +32,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
         const routes = new Map<string, NostrFilter[]>();
 
         // Route to all read relays
-        const readRelays = relayMetadata.current.relays
+        const readRelays = config.relayMetadata.relays
           .filter(r => r.read)
           .map(r => r.url);
 
@@ -48,7 +44,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
       },
       eventRouter(_event: NostrEvent) {
         // Get write relays from metadata
-        const writeRelays = relayMetadata.current.relays
+        const writeRelays = config.relayMetadata.relays
           .filter(r => r.write)
           .map(r => r.url);
 
@@ -60,7 +56,7 @@ const NostrProvider: React.FC<NostrProviderProps> = (props) => {
   }
 
   return (
-    <NostrContext.Provider value={{ nostr: pool.current }}>
+    <NostrContext.Provider value={{ nostr: pool.current, relays: config.relayMetadata.relays }}>
       {children}
     </NostrContext.Provider>
   );

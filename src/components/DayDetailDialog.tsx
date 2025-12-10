@@ -1,3 +1,4 @@
+import { AutocompleteTextarea } from './AutocompleteTextarea';
 import { useState, useEffect } from 'react';
 import {
   Dialog,
@@ -7,7 +8,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea';
 import { Loader2, Save, Sparkles, Share2 } from 'lucide-react';
 import type { DayInfo } from '@/lib/gratitudeUtils';
 import { getQuoteForDay, getAffirmationForDay, formatDisplayDate } from '@/lib/gratitudeUtils';
@@ -273,12 +273,9 @@ https://gratefulday.space`;
                     </p>
                   )}
                 </div>
-                <Textarea
-                  placeholder="Share what you're grateful for..."
+                <AutocompleteTextarea
                   value={gratitudeText}
-                  onChange={(e) => setGratitudeText(e.target.value)}
-                  rows={6}
-                  className="resize-none text-base border-[#EEDCC5] focus-visible:border-[#EEDCC5] focus-visible:ring-2 focus-visible:ring-amber-200/50 dark:focus-visible:ring-amber-800/50 focus-visible:ring-offset-2"
+                  onChange={setGratitudeText}
                 />
                 <p className="text-xs text-muted-foreground">
                   {gratitudeText.length} characters
