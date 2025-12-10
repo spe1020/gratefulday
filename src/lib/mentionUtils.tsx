@@ -6,7 +6,8 @@ export const renderTextWithMentions = (text: string, mentionedProfiles: Map<stri
 
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
-  const mentionRegex = /nostr:(npub1[a-z0-9]{58,}|nprofile1[a-z0-9]{58,})/g;
+  // Match nostr mentions with exact lengths: npub1/nprofile1 (58-59 chars)
+  const mentionRegex = /nostr:(npub1[a-z0-9]{58,59}|nprofile1[a-z0-9]{58,})\b/g;
   let match: RegExpExecArray | null;
 
   while ((match = mentionRegex.exec(text)) !== null) {
@@ -18,6 +19,8 @@ export const renderTextWithMentions = (text: string, mentionedProfiles: Map<stri
     }
 
     const profile = mentionedProfiles.get(fullMention);
+    // Add zero-width spaces around mention for cursor positioning
+    parts.push('\u200B');
     parts.push(
       <span
         key={`mention-${match.index}`}
@@ -29,6 +32,7 @@ export const renderTextWithMentions = (text: string, mentionedProfiles: Map<stri
         @{profile?.name || fullMention.substring(6, 16) + '...'}
       </span>
     );
+    parts.push('\u200B');
 
     lastIndex = match.index + fullMention.length;
   }

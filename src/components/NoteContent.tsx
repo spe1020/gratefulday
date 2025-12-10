@@ -19,9 +19,11 @@ export function NoteContent({
   // Process the content to render mentions, links, etc.
   const content = useMemo(() => {
     const text = event.content;
-    
+
     // Regex to find URLs, Nostr references, and hashtags
-    const regex = /(https?:\/\/[^\s]+)|nostr:(npub1|note1|nprofile1|nevent1)([023456789acdefghjklmnpqrstuvwxyz]+)|(#\w+)/g;
+    // npub1/note1: 58-59 chars, nprofile1/nevent1: 58+ chars
+    // Using word boundaries to prevent matching beyond valid identifiers
+    const regex = /(https?:\/\/[^\s]+)|nostr:(npub1[023456789acdefghjklmnpqrstuvwxyz]{58,59}|note1[023456789acdefghjklmnpqrstuvwxyz]{58,59}|(?:nprofile1|nevent1)[023456789acdefghjklmnpqrstuvwxyz]{58,})\b|(#\w+)/g;
     
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
@@ -29,18 +31,18 @@ export function NoteContent({
     let keyCounter = 0;
     
     while ((match = regex.exec(text)) !== null) {
-      const [fullMatch, url, nostrPrefix, nostrData, hashtag] = match;
+      const [fullMatch, url, nostrId, hashtag] = match;
       const index = match.index;
-      
+
       // Add text before this match
       if (index > lastIndex) {
         parts.push(text.substring(lastIndex, index));
       }
-      
+
       if (url) {
         // Handle URLs
         parts.push(
-          <a 
+          <a
             key={`url-${keyCounter++}`}
             href={url}
             target="_blank"
@@ -50,12 +52,11 @@ export function NoteContent({
             {url}
           </a>
         );
-      } else if (nostrPrefix && nostrData) {
+      } else if (nostrId) {
         // Handle Nostr references
         try {
-          const nostrId = `${nostrPrefix}${nostrData}`;
           const decoded = nip19.decode(nostrId);
-          
+
           if (decoded.type === 'npub') {
             const pubkey = decoded.data;
             parts.push(
@@ -64,7 +65,7 @@ export function NoteContent({
           } else {
             // For other types, just show as a link
             parts.push(
-              <Link 
+              <Link
                 key={`nostr-${keyCounter++}`}
                 to={`/${nostrId}`}
                 className="text-blue-500 hover:underline"
@@ -81,7 +82,7 @@ export function NoteContent({
         // Handle hashtags
         const tag = hashtag.slice(1); // Remove the #
         parts.push(
-          <Link 
+          <Link
             key={`hashtag-${keyCounter++}`}
             to={`/t/${tag}`}
             className="text-blue-500 hover:underline"
@@ -90,7 +91,7 @@ export function NoteContent({
           </Link>
         );
       }
-      
+
       lastIndex = index + fullMatch.length;
     }
     
