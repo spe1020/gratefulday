@@ -273,10 +273,11 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
     const processNode = (node: Node) => {
       if (node.nodeType === Node.TEXT_NODE) {
-        text += node.textContent || '';
+        // Add text but strip zero-width spaces used for cursor positioning
+        text += (node.textContent || '').replace(/\u200B/g, '');
       } else if (node.nodeType === Node.ELEMENT_NODE) {
         const el = node as HTMLElement;
-        
+
         // Check if this element has a mention attribute
         if (el.dataset.mention) {
           text += el.dataset.mention;
@@ -401,35 +402,39 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
 
 
-  
 
 
+            // Insert zero-width space before pill for cursor positioning
+            const zwsBefore = document.createTextNode('\u200B');
+            range.insertNode(zwsBefore);
+            range.setStartAfter(zwsBefore);
 
             range.insertNode(pill);
 
 
 
-  
 
 
 
-            
 
 
 
-  
-
+            // Insert zero-width space after pill for cursor positioning
+            const zwsAfter = document.createTextNode('\u200B');
+            range.setStartAfter(pill);
+            range.insertNode(zwsAfter);
+            range.setStartAfter(zwsAfter);
 
 
             const space = document.createTextNode(' '); // Single space
 
 
 
-  
 
 
 
-            range.setStartAfter(pill);
+
+            range.setStartAfter(zwsAfter);
 
 
 
@@ -525,7 +530,7 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
     // Handle Backspace to remove mention pill before cursor
     if (e.key === 'Backspace') {
-      // First check if a mention pill is selected (user-select: all makes this happen)
+      // Only delete mention pill if it's actually selected (user-select: all makes this happen)
       if (!range.collapsed) {
         const container = range.commonAncestorContainer;
         let mentionElement: HTMLElement | null = null;
@@ -548,22 +553,8 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
           return;
         }
       }
-
-      // Handle backspace when cursor is at the start of a text node after a mention
-      if (range.collapsed) {
-        const { startContainer, startOffset } = range;
-        if (startContainer.nodeType === Node.TEXT_NODE && startOffset === 0) {
-          const prevSibling = startContainer.previousSibling;
-          if (prevSibling && prevSibling.nodeType === Node.ELEMENT_NODE && (prevSibling as HTMLElement).dataset.mention) {
-            e.preventDefault();
-            prevSibling.remove();
-            if (contentEditableRef.current) {
-              handleInput({ currentTarget: contentEditableRef.current } as React.FormEvent<HTMLDivElement>);
-            }
-            return;
-          }
-        }
-      }
+      // Removed: aggressive deletion when cursor is adjacent to mention
+      // Pills should only be deleted when explicitly selected by clicking on them
     }
 
     // Only handle arrow keys and Enter when dropdown is showing

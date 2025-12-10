@@ -19,6 +19,8 @@ export const renderTextWithMentions = (text: string, mentionedProfiles: Map<stri
     }
 
     const profile = mentionedProfiles.get(fullMention);
+    // Add zero-width spaces around mention for cursor positioning
+    parts.push('\u200B');
     parts.push(
       <span
         key={`mention-${match.index}`}
@@ -30,6 +32,7 @@ export const renderTextWithMentions = (text: string, mentionedProfiles: Map<stri
         @{profile?.name || fullMention.substring(6, 16) + '...'}
       </span>
     );
+    parts.push('\u200B');
 
     lastIndex = match.index + fullMention.length;
   }
