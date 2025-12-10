@@ -47,8 +47,6 @@ export default function Index() {
 
   const today = new Date();
   const currentYear = today.getFullYear();
-  const currentDayOfYear = getDayOfYear(today);
-  const totalDays = getTotalDaysInYear(currentYear);
 
   // Handle header shadow on scroll
   useEffect(() => {
