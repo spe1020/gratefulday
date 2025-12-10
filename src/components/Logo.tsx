@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { Sparkles } from 'lucide-react';
 
@@ -33,7 +34,7 @@ export function Logo({ className, showText = true, size = 'md' }: LogoProps) {
   if (imageError) {
     // Fallback to icon if image doesn't exist
     return (
-      <div className={cn('flex items-center gap-2', className)}>
+      <Link to="/?tab=calendar" className={cn('flex items-center gap-2', className)}>
         <div className={cn(
           'p-2 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 shadow-lg flex-shrink-0',
           size === 'sm' && 'p-1.5',
@@ -51,12 +52,12 @@ export function Logo({ className, showText = true, size = 'md' }: LogoProps) {
             GratefulDay
           </span>
         )}
-      </div>
+      </Link>
     );
   }
 
   return (
-    <div className={cn('flex items-center', className)}>
+    <Link to="/?tab=calendar" className={cn('flex items-center', className)}>
       <img
         src={logoPaths[currentPathIndex]}
         alt="GratefulDay"
@@ -74,7 +75,7 @@ export function Logo({ className, showText = true, size = 'md' }: LogoProps) {
           GratefulDay
         </span>
       )}
-    </div>
+    </Link>
   );
 }
 

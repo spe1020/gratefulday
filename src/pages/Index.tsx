@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useHead } from '@unhead/react';
 import { CalendarView } from '@/components/CalendarView';
 import { CommunityFeed } from '@/components/CommunityFeed';
@@ -9,6 +10,8 @@ import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useGratitudeEntries } from '@/hooks/useGratitudeEntries';
 import {
   getAllDaysInYear,
+  getDayOfYear,
+  getTotalDaysInYear,
 } from '@/lib/gratitudeUtils';
 import { Logo } from '@/components/Logo';
 import { useIsMobile } from '@/hooks/useIsMobile';
@@ -33,7 +36,9 @@ export default function Index() {
 
   const { user } = useCurrentUser();
   const { data: gratitudeEntries, isLoading } = useGratitudeEntries(user?.pubkey);
-  const [activeTab, setActiveTab] = useState('calendar');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get('tab') || 'calendar';
+
   const [headerScrolled, setHeaderScrolled] = useState(false);
   const [giftModalOpen, setGiftModalOpen] = useState(false);
   const [libraryModalOpen, setLibraryModalOpen] = useState(false);
@@ -42,6 +47,8 @@ export default function Index() {
 
   const today = new Date();
   const currentYear = today.getFullYear();
+  const currentDayOfYear = getDayOfYear(today);
+  const totalDays = getTotalDaysInYear(currentYear);
 
   // Handle header shadow on scroll
   useEffect(() => {
@@ -51,6 +58,10 @@ export default function Index() {
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  const handleTabChange = (tab: string) => {
+    setSearchParams({ tab });
+  };
 
   // Get all days in the current year
   const allDays = useMemo(() => getAllDaysInYear(currentYear), [currentYear]);
@@ -70,7 +81,7 @@ export default function Index() {
   }, [gratitudeEntries]);
 
   return (
-    <Tabs value={activeTab} onValueChange={setActiveTab}>
+    <Tabs value={activeTab} onValueChange={handleTabChange}>
       <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-rose-50 dark:from-gray-900 dark:via-gray-900 dark:to-gray-900">
         {/* Header */}
         <header
@@ -143,7 +154,7 @@ export default function Index() {
                         <Button
                           variant="ghost"
                           onClick={() => {
-                            setActiveTab('calendar');
+                            handleTabChange('calendar');
                             setMobileMenuOpen(false);
                           }}
                           className={cn(
@@ -158,7 +169,7 @@ export default function Index() {
                         <Button
                           variant="ghost"
                           onClick={() => {
-                            setActiveTab('community');
+                            handleTabChange('community');
                             setMobileMenuOpen(false);
                           }}
                           className={cn(
