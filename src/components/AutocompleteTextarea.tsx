@@ -86,9 +86,9 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
 
     // Match @username, @npub1..., @nprofile1..., nostr:npub1..., or nostr:nprofile1...
-    // Pattern allows dots/hyphens in middle but not at end (e.g., @nostr.build but not @seth.)
+    // Pattern allows dots/hyphens in middle and temporarily at end while typing
 
-    const atMatch = textBeforeCursor.match(/@([\w]+(?:[.-][\w]+)*)$/);
+    const atMatch = textBeforeCursor.match(/@([\w]+(?:[.-][\w]+)*[.-]?)$/);
 
     const nostrMatch = textBeforeCursor.match(/nostr:(npub1[\w]+|nprofile1[\w]+)$/);
 
@@ -150,9 +150,11 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
     } else if (atMatch) {
 
-      const query = atMatch[1];
+      // Remove trailing dot/hyphen from query (user might still be typing)
+      const query = atMatch[1].replace(/[.-]+$/, '');
 
-
+      // Skip if query is empty after trimming
+      if (!query) return;
 
       // Check if it's already a valid nostr identifier (must be complete)
 
@@ -320,7 +322,7 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
 
 
-      const atMatch = textBeforeCursor.match(/@([\w]+(?:[.-][\w]+)*)$/);
+      const atMatch = textBeforeCursor.match(/@([\w]+(?:[.-][\w]+)*[.-]?)$/);
 
 
 
