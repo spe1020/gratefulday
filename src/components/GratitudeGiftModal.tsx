@@ -27,7 +27,7 @@ const CUSTOM_AMOUNT = 'custom' as const;
 
 type AmountOption = typeof SAT_AMOUNTS[number] | typeof RANDOM_AMOUNT | typeof CUSTOM_AMOUNT;
 
-const DEFAULT_MESSAGE = "A small gift of gratitude from someone who appreciates you today. 💜";
+const DEFAULT_MESSAGE = "A random zap of kindness, sent your way today 💜";
 const WEBSITE_URL = "https://gratefulday.space";
 
 type PaymentState = 'form' | 'invoice' | 'success';
@@ -153,8 +153,9 @@ export function GratitudeGiftModal({ open, onOpenChange }: GratitudeGiftModalPro
     const baseMessage = customMessage.trim() || DEFAULT_MESSAGE;
     const message = `${baseMessage} ${WEBSITE_URL}`;
 
+    // Use the existing sendGratitudeGift function which handles recipient selection internally
     const result = await sendGratitudeGift(amount, message);
-    
+      
     if (result.success) {
       // Payment completed automatically
       setPaymentState('success');
@@ -223,7 +224,7 @@ export function GratitudeGiftModal({ open, onOpenChange }: GratitudeGiftModalPro
           <>
             <DialogHeader>
               <DialogTitle className="text-2xl font-bold">
-                Release a Gratitude Gift
+                Release a Random Zap of Kindness
               </DialogTitle>
             </DialogHeader>
 
@@ -231,13 +232,15 @@ export function GratitudeGiftModal({ open, onOpenChange }: GratitudeGiftModalPro
               {/* Body copy */}
               <div className="space-y-4 text-sm text-foreground leading-relaxed">
                 <p>
-                  Gratitude grows when it's shared.
+                  A small act, returned at random.
                 </p>
                 <p>
-                  When you send a gratitude gift, a small amount of sats is sent to a randomly selected person on Nostr. We filter out bots and news accounts, so your gift goes to a real person. You don't choose who receives it—the recipient is randomly selected from active users.
+                  Your zap is sent to a randomly selected person on Nostr who has zapped within the last few hours. We filter out bots and news accounts so your kindness reaches a real individual.
                 </p>
                 <p>
-                  It's a simple way to spread kindness without expecting anything in return.
+                  No choosing.<br />
+                  No expectations.<br />
+                  Just kindness, flowing back through the network.
                 </p>
               </div>
 
@@ -309,7 +312,7 @@ export function GratitudeGiftModal({ open, onOpenChange }: GratitudeGiftModalPro
                   Message (optional)
                 </label>
                 <Textarea
-                  placeholder={`${DEFAULT_MESSAGE} ${WEBSITE_URL}`}
+                  placeholder={`${DEFAULT_MESSAGE}\n${WEBSITE_URL}`}
                   value={customMessage}
                   onChange={(e) => setCustomMessage(e.target.value)}
                   rows={3}
@@ -509,3 +512,5 @@ export function GratitudeGiftModal({ open, onOpenChange }: GratitudeGiftModalPro
     </Dialog>
   );
 }
+
+

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useWallet } from '@/hooks/useWallet';
 import { useNWC } from '@/hooks/useNWCContext';
@@ -8,8 +8,8 @@ import { nip57 } from 'nostr-tools';
 import type { Event } from 'nostr-tools';
 import { useNostr } from '@nostrify/react';
 import type { NostrEvent } from '@nostrify/nostrify';
-import { isBot } from '@/lib/botDetection';
 import { openInvoiceInWalletApp, getWalletAppInfo } from '@/lib/walletApps';
+import { selectRandomZapper } from '@/services/zapDetector';
 
 /**
  * Hook for sending anonymous gratitude gifts (zaps) to random Nostr users
@@ -38,7 +38,7 @@ export function useGratitudeGift() {
   /**
    * Get recent recipients (last 5) from localStorage to avoid repeating
    */
-  const getRecentRecipients = (): string[] => {
+  const getRecentRecipients = useCallback((): string[] => {
     try {
       const stored = localStorage.getItem('gratitudeGift_recentRecipients');
       if (stored) {
@@ -48,7 +48,7 @@ export function useGratitudeGift() {
     } catch {
       return [];
     }
-  };
+  }, []);
 
   /**
    * Save a recipient to the recent recipients list (keeps last 5)
@@ -69,132 +69,74 @@ export function useGratitudeGift() {
   };
 
   /**
-   * Select a random active Nostr pubkey with lightning address and return profile event
-   * Queries for random active users from recent events and verifies they have lightning addresses
-   * Also filters to only include users who have sent a zap in the last 10 days
-   * Excludes the last recipient to avoid zapping the same person twice in a row
+   * Select a random active Nostr pubkey using zap detector logic
+   * Queries multiple relays for zap receipts, filters for valid zaps (> 10 sats),
+   * and randomly selects a zapper
+   * Excludes recent recipients to avoid zapping the same person repeatedly
    */
-  const selectRandomRecipient = async (excludePubkey?: string | null): Promise<{ pubkey: string; profileEvent: unknown; profileData: unknown } | null> => {
-    // Select random recipient from active users with lightning addresses
+  const selectRandomRecipient = useCallback(async (): Promise<{ 
+    pubkey: string; 
+    profileEvent: unknown; 
+    profileData: unknown;
+    lightningAddress: string;
+  } | null> => {
     try {
-      // Get recent recipients to exclude (last 5 to ensure variety)
-      const recentRecipients = excludePubkey ? [excludePubkey] : getRecentRecipients();
+      // Get exclude list (current user + recent recipients)
+      const excludePubkeys = [
+        ...(user?.pubkey ? [user.pubkey] : []),
+        ...getRecentRecipients()
+      ];
       
-      // Query for recent kind 1 events and select a random author
-      const signal = AbortSignal.timeout(5000);
-      const recentEvents = await nostr.query(
-        [{ kinds: [1], limit: 50 }],
-        { signal }
-      );
-
-      if (recentEvents.length === 0) {
+      console.log(`[GratitudeGift] Using zap detector to find random zapper (excluding ${excludePubkeys.length} pubkeys)`);
+      
+      // Use zap detector to select random zapper
+      const selectedZapper = await selectRandomZapper(7, excludePubkeys);
+      
+      if (!selectedZapper) {
+        console.log('[GratitudeGift] No valid zappers found');
         return null;
       }
-
-      // Get unique pubkeys from recent events
-      const pubkeys = Array.from(
-        new Set(recentEvents.map((e) => e.pubkey))
-      ).filter((pk) => {
-        // Exclude current user
-        if (pk === user?.pubkey) return false;
-        // Exclude recent recipients to avoid zapping same people repeatedly
-        if (recentRecipients.includes(pk)) {
-          console.log(`[GratitudeGift] Excluding recent recipient: ${pk.substring(0, 8)}...`);
-          return false;
-        }
-        return true;
-      });
-
-      console.log(`[GratitudeGift] Found ${pubkeys.length} unique pubkeys from recent events${recentRecipients.length > 0 ? ` (excluding ${recentRecipients.length} recent recipient(s))` : ''}`);
-
-      if (pubkeys.length === 0) {
-        console.log('[GratitudeGift] No pubkeys found after filtering current user');
-        return null;
-      }
-
-      // Batch fetch profiles (query all at once for efficiency)
+      
+      // Fetch profile for the selected zapper
       const profileSignal = AbortSignal.timeout(5000);
       const profileEvents = await nostr.query(
-        [{ kinds: [0], authors: pubkeys, limit: pubkeys.length }],
+        [{ kinds: [0], authors: [selectedZapper.zapperPubkey], limit: 1 }],
         { signal: profileSignal }
       );
-
-      console.log(`[GratitudeGift] Fetched ${profileEvents.length} profiles`);
-
-      // Create a map of pubkey -> profile event
-      const profileMap = new Map<string, typeof profileEvents[0]>();
-      profileEvents.forEach((event) => {
-        profileMap.set(event.pubkey, event);
-      });
-
-      // First pass: filter by lightning address and bot status
-      const candidatesWithLightning: Array<{ pubkey: string; profileEvent: unknown; profileData: unknown }> = [];
       
-      for (const pubkey of pubkeys) {
-        const profileEvent = profileMap.get(pubkey);
-        if (!profileEvent) {
-          continue;
-        }
-
-        try {
-          const profileData = JSON.parse(profileEvent.content);
-          const lightningAddress = profileData.lud16 || profileData.lud06;
-          
-          // Must have lightning address and not be a bot
-          if (lightningAddress && !isBot(profileData.nip05, lightningAddress)) {
-            candidatesWithLightning.push({ pubkey, profileEvent, profileData });
-          }
-        } catch {
-          // Invalid profile JSON, skip
-          continue;
-        }
-      }
-
-      console.log(`[GratitudeGift] ${candidatesWithLightning.length} candidates with lightning addresses (after bot filtering)`);
-
-      if (candidatesWithLightning.length === 0) {
+      if (profileEvents.length === 0) {
+        console.log('[GratitudeGift] Could not fetch profile for selected zapper');
         return null;
       }
-
-      // Background zap activity check (non-blocking, for future use)
-      // Note: We don't filter by zap activity anymore as it was limiting the pool too much
-      const thirtyDaysAgo = Math.floor(Date.now() / 1000) - (30 * 24 * 60 * 60);
-      nostr.query(
-        [{
-          kinds: [9734], // Zap request
-          since: thirtyDaysAgo,
-          limit: 5000
-        }],
-        { signal: AbortSignal.timeout(5000) }
-      ).catch(() => {
-        // Ignore errors - this is just for background info
-      });
-
-      // Use all candidates - no zap filtering
-      const validRecipients = candidatesWithLightning;
-
-      // If we excluded recent recipients and now have no valid recipients, 
-      // allow them again as a fallback (better than no recipient)
-      if (validRecipients.length === 0 && recentRecipients.length > 0) {
-        // Re-check candidates to see if any recent recipients are available
-        const fallbackRecipient = candidatesWithLightning.find(c => recentRecipients.includes(c.pubkey));
-        if (fallbackRecipient) {
-          return fallbackRecipient;
-        }
+      
+      const profileEvent = profileEvents[0];
+      let profileData: Record<string, unknown> = {};
+      try {
+        profileData = JSON.parse(profileEvent.content);
+      } catch {
+        // Invalid JSON, continue with empty profile
       }
-
-      if (validRecipients.length === 0) {
+      
+      // Check for lightning address
+      const lightningAddress = (profileData.lud16 as string) || (profileData.lud06 as string);
+      if (!lightningAddress) {
+        console.log('[GratitudeGift] Selected zapper has no lightning address');
         return null;
       }
-
-      // Select random recipient from valid ones
-      const randomIndex = Math.floor(Math.random() * validRecipients.length);
-      return validRecipients[randomIndex];
+      
+      console.log(`[GratitudeGift] Selected zapper: ${selectedZapper.zapperNpub.substring(0, 16)}...`);
+      
+      return {
+        pubkey: selectedZapper.zapperPubkey,
+        profileEvent,
+        profileData,
+        lightningAddress,
+      };
     } catch (error) {
       console.error('Error selecting random recipient:', error);
       return null;
     }
-  };
+  }, [nostr, user?.pubkey, getRecentRecipients]);
 
   /**
    * Check if an invoice has been paid by querying the zap endpoint
@@ -297,12 +239,12 @@ export function useGratitudeGift() {
 
       // Create zap request with gratitude message
       const zapAmount = amount * 1000; // convert to millisats
-      const defaultMessage = "A small gift of gratitude from someone who appreciates you today. 💜";
+      const defaultMessage = "A random zap of kindness, sent your way today 💜";
       const baseMessage = message || defaultMessage;
       // Ensure website URL is included (append if not already present)
       const gratitudeMessage = baseMessage.includes("gratefulday.space") 
         ? baseMessage 
-        : `${baseMessage} https://gratefulday.space`;
+        : `${baseMessage}\nhttps://gratefulday.space`;
       
       // Get relay URLs for publishing zap request
       const relayUrls = config.relayMetadata.relays
@@ -453,6 +395,7 @@ export function useGratitudeGift() {
     verifyAndPublishPayment,
     checkInvoiceStatus,
     isSending,
+    selectRandomRecipient,
   };
 }
 

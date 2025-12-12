@@ -39,6 +39,8 @@ interface ZapDialogProps {
   target: Event;
   children?: React.ReactNode;
   className?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 const presetAmounts = [
@@ -235,8 +237,10 @@ const ZapContent = forwardRef<HTMLDivElement, ZapContentProps>(({
 ));
 ZapContent.displayName = 'ZapContent';
 
-export function ZapDialog({ target, children, className }: ZapDialogProps) {
-  const [open, setOpen] = useState(false);
+export function ZapDialog({ target, children, className, open: controlledOpen, onOpenChange: controlledOnOpenChange }: ZapDialogProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen !== undefined ? controlledOpen : internalOpen;
+  const setOpen = controlledOnOpenChange || setInternalOpen;
   const { user } = useCurrentUser();
   const { data: author } = useAuthor(target.pubkey);
   const { toast } = useToast();
@@ -251,9 +255,12 @@ export function ZapDialog({ target, children, className }: ZapDialogProps) {
 
   useEffect(() => {
     if (target) {
-      setComment('Zapped with MKStack!');
+      // Only set default comment if not controlled (to preserve custom messages)
+      if (controlledOpen === undefined) {
+        setComment('Zapped with MKStack!');
+      }
     }
-  }, [target]);
+  }, [target, controlledOpen]);
 
   // Generate QR code
   useEffect(() => {
@@ -372,11 +379,13 @@ export function ZapDialog({ target, children, className }: ZapDialogProps) {
         shouldScaleBackground={false}
         fadeFromIndex={0}
       >
-        <DrawerTrigger asChild>
-          <div className={`cursor-pointer ${className || ''}`}>
-            {children}
-          </div>
-        </DrawerTrigger>
+        {controlledOpen === undefined && (
+          <DrawerTrigger asChild>
+            <div className={`cursor-pointer ${className || ''}`}>
+              {children}
+            </div>
+          </DrawerTrigger>
+        )}
         <DrawerContent
           key={invoice ? 'payment' : 'form'}
           className={cn(
@@ -434,11 +443,13 @@ export function ZapDialog({ target, children, className }: ZapDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <div className={`cursor-pointer ${className || ''}`}>
-          {children}
-        </div>
-      </DialogTrigger>
+      {controlledOpen === undefined && (
+        <DialogTrigger asChild>
+          <div className={`cursor-pointer ${className || ''}`}>
+            {children}
+          </div>
+        </DialogTrigger>
+      )}
       <DialogContent className="sm:max-w-[425px] max-h-[95vh] overflow-hidden" data-testid="zap-modal">
         <DialogHeader>
           <DialogTitle className="text-lg break-words">
