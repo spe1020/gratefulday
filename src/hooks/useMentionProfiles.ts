@@ -7,7 +7,8 @@ export const useMentionProfiles = (text: string) => {
   const { fetchProfile, parseIdentifier } = useProfileSearchService();
 
   useEffect(() => {
-    const nostrMentions = text.match(/nostr:(npub1[a-z0-9]{58,}|nprofile1[a-z0-9]{58,})/g);
+    // Match nostr mentions with exact lengths: npub1/nprofile1 (58-59 chars)
+    const nostrMentions = text.match(/nostr:(npub1[a-z0-9]{58,59}|nprofile1[a-z0-9]{58,})\b/g);
     if (nostrMentions) {
       nostrMentions.forEach(async (mention) => {
         if (mentionedProfiles.has(mention)) return;

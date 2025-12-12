@@ -86,8 +86,9 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
 
     // Match @username, @npub1..., @nprofile1..., nostr:npub1..., or nostr:nprofile1...
+    // Pattern allows dots/hyphens in middle and temporarily at end while typing
 
-    const atMatch = textBeforeCursor.match(/@([\w]+)$/);
+    const atMatch = textBeforeCursor.match(/@([\w]+(?:[.-][\w]+)*[.-]?)$/);
 
     const nostrMatch = textBeforeCursor.match(/nostr:(npub1[\w]+|nprofile1[\w]+)$/);
 
@@ -149,9 +150,15 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
     } else if (atMatch) {
 
-      const query = atMatch[1];
+      // Remove trailing dot/hyphen from query (user might still be typing)
+      const query = atMatch[1].replace(/[.-]+$/, '');
 
-
+      // Skip if query is empty after trimming
+      if (!query) {
+        setShowDropdown(false);
+        setSuggestions([]);
+        return;
+      }
 
       // Check if it's already a valid nostr identifier (must be complete)
 
@@ -211,6 +218,10 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
         }, 500);
 
+      } else {
+        // Query too short or doesn't meet criteria
+        setShowDropdown(false);
+        setSuggestions([]);
       }
 
     }
@@ -262,22 +273,41 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
     const processNode = (node: Node) => {
       if (node.nodeType === Node.TEXT_NODE) {
-        text += node.textContent || '';
+        // Add text but strip zero-width spaces used for cursor positioning
+        text += (node.textContent || '').replace(/\u200B/g, '');
       } else if (node.nodeType === Node.ELEMENT_NODE) {
         const el = node as HTMLElement;
-        
+
         // Check if this element has a mention attribute
         if (el.dataset.mention) {
           text += el.dataset.mention;
         } else {
-          // Recursively process child nodes
-          el.childNodes.forEach(child => processNode(child));
+          // Handle line breaks
+          const tagName = el.tagName.toLowerCase();
+          if (tagName === 'br') {
+            text += '\n';
+          } else if (tagName === 'div' || tagName === 'p') {
+            // Add newline before block elements (except the first one)
+            if (text.length > 0 && !text.endsWith('\n')) {
+              text += '\n';
+            }
+            // Recursively process child nodes
+            el.childNodes.forEach(child => processNode(child));
+            // Add newline after block elements if there's content
+            if (el.childNodes.length > 0) {
+              text += '\n';
+            }
+          } else {
+            // Recursively process child nodes for other elements
+            el.childNodes.forEach(child => processNode(child));
+          }
         }
       }
     };
 
     element.childNodes.forEach(processNode);
-    return text;
+    // Clean up multiple consecutive newlines (but preserve double newlines for paragraph breaks)
+    return text.replace(/\n{3,}/g, '\n\n').trimEnd();
   };
 
 
@@ -306,11 +336,11 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
 
 
-      
 
 
 
-      const atMatch = textBeforeCursor.match(/@([\w]+)$/);
+
+      const atMatch = textBeforeCursor.match(/@([\w]+(?:[.-][\w]+)*[.-]?)$/);
 
 
 
@@ -390,35 +420,39 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
 
 
-  
 
 
+            // Insert zero-width space before pill for cursor positioning
+            const zwsBefore = document.createTextNode('\u200B');
+            range.insertNode(zwsBefore);
+            range.setStartAfter(zwsBefore);
 
             range.insertNode(pill);
 
 
 
-  
 
 
 
-            
 
 
 
-  
-
-
-
-            const space = document.createTextNode('  '); // Two spaces
-
-
-
-  
-
-
-
+            // Insert zero-width space after pill for cursor positioning
+            const zwsAfter = document.createTextNode('\u200B');
             range.setStartAfter(pill);
+            range.insertNode(zwsAfter);
+            range.setStartAfter(zwsAfter);
+
+
+            const space = document.createTextNode(' '); // Single space
+
+
+
+
+
+
+
+            range.setStartAfter(zwsAfter);
 
 
 
@@ -514,7 +548,7 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
     // Handle Backspace to remove mention pill before cursor
     if (e.key === 'Backspace') {
-      // First check if a mention pill is selected (user-select: all makes this happen)
+      // Only delete mention pill if it's actually selected (user-select: all makes this happen)
       if (!range.collapsed) {
         const container = range.commonAncestorContainer;
         let mentionElement: HTMLElement | null = null;
@@ -537,35 +571,24 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
           return;
         }
       }
-
-      // Handle backspace when cursor is at the start of a text node after a mention
-      if (range.collapsed) {
-        const { startContainer, startOffset } = range;
-        if (startContainer.nodeType === Node.TEXT_NODE && startOffset === 0) {
-          const prevSibling = startContainer.previousSibling;
-          if (prevSibling && prevSibling.nodeType === Node.ELEMENT_NODE && (prevSibling as HTMLElement).dataset.mention) {
-            e.preventDefault();
-            prevSibling.remove();
-            if (contentEditableRef.current) {
-              handleInput({ currentTarget: contentEditableRef.current } as React.FormEvent<HTMLDivElement>);
-            }
-            return;
-          }
-        }
-      }
+      // Removed: aggressive deletion when cursor is adjacent to mention
+      // Pills should only be deleted when explicitly selected by clicking on them
     }
 
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setHighlightedIndex((prev) => (prev < suggestions.length - 1 ? prev + 1 : prev));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : prev));
-    } else if (e.key === 'Enter' && highlightedIndex > -1) {
-      e.preventDefault();
-      handleUserSelect(suggestions[highlightedIndex]);
-    } else if (e.key === 'Escape') {
-      setShowDropdown(false);
+    // Only handle arrow keys and Enter when dropdown is showing
+    if (showDropdown) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setHighlightedIndex((prev) => (prev < suggestions.length - 1 ? prev + 1 : prev));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : prev));
+      } else if (e.key === 'Enter' && highlightedIndex > -1) {
+        e.preventDefault();
+        handleUserSelect(suggestions[highlightedIndex]);
+      } else if (e.key === 'Escape') {
+        setShowDropdown(false);
+      }
     }
   };
 
