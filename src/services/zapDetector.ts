@@ -8,6 +8,7 @@
 import { Relay } from 'nostr-tools/relay';
 import { nip57, nip19 } from 'nostr-tools';
 import type { Event } from 'nostr-tools';
+import type { Subscription } from 'nostr-tools/abstract-relay';
 
 // Three relays to query in parallel
 const RELAYS = [
@@ -22,14 +23,20 @@ interface ZapDetectorResult {
   amount: number;
 }
 
+interface ZapEvent {
+  pubkey?: string;
+  content?: string;
+  tags?: string[][];
+}
+
 /**
  * Query a single relay for zap receipts
  */
 async function queryRelay(relayUrl: string, since: number, limit = 1000): Promise<{ relay: string; events: Event[]; success: boolean }> {
   return new Promise((resolve) => {
     const zapReceipts: Event[] = [];
-    let relay: any = null;
-    let sub: any = null;
+    let relay: Relay | null = null;
+    let sub: Subscription | null = null;
     let timeoutId: NodeJS.Timeout | null = null;
 
     Relay.connect(relayUrl)
@@ -140,10 +147,10 @@ export async function selectRandomZapper(
       // Must be > 10 sats
       if (amount <= 10) continue;
       
-      let zapEvent: any = null;
+      let zapEvent: ZapEvent | null = null;
       if (descriptionTag && descriptionTag[1]) {
         try {
-          zapEvent = JSON.parse(descriptionTag[1]);
+          zapEvent = JSON.parse(descriptionTag[1]) as ZapEvent;
         } catch {
           // Ignore parse errors
         }
