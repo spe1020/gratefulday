@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { TodayHero } from './TodayHero';
+import { TodayTeachingCard } from './TodayTeachingCard';
 import { PastDaysList } from './PastDaysList';
 import { DayDetailDialog } from './DayDetailDialog';
 import type { DayInfo } from '@/lib/gratitudeUtils';
@@ -48,6 +49,9 @@ export function CalendarView({ days, entriesByDate }: CalendarViewProps) {
           onOpenDetail={handleOpenDetail}
           totalDays={totalDays}
         />
+
+        {/* Today's Teaching - Open by default when page loads */}
+        <TodayTeachingCard dayOfYear={today.dayOfYear} defaultOpen={true} />
 
         {/* Past Days - Quiet, accessible, but visually subdued */}
         <PastDaysList

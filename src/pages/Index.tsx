@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import { useHead } from '@unhead/react';
 import { CalendarView } from '@/components/CalendarView';
 import { CommunityFeed } from '@/components/CommunityFeed';
@@ -15,7 +15,6 @@ import { Logo } from '@/components/Logo';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { cn } from '@/lib/utils';
 import { GratitudeGiftModal } from '@/components/GratitudeGiftModal';
-import { LibraryComingSoonModal } from '@/components/LibraryComingSoonModal';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Menu } from 'lucide-react';
@@ -39,7 +38,6 @@ export default function Index() {
 
   const [headerScrolled, setHeaderScrolled] = useState(false);
   const [giftModalOpen, setGiftModalOpen] = useState(false);
-  const [libraryModalOpen, setLibraryModalOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isMobile = useIsMobile();
 
@@ -118,10 +116,10 @@ export default function Index() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => setLibraryModalOpen(true)}
+                      asChild
                       className="text-sm px-3 py-2 h-auto rounded-md hover:bg-amber-50 dark:hover:bg-amber-950/20 data-[state=active]:bg-amber-100 dark:data-[state=active]:bg-amber-900/30"
                     >
-                      Library
+                      <Link to="/library">Library</Link>
                     </Button>
                     <Button
                       variant="ghost"
@@ -179,13 +177,12 @@ export default function Index() {
                         </Button>
                         <Button
                           variant="ghost"
-                          onClick={() => {
-                            setLibraryModalOpen(true);
-                            setMobileMenuOpen(false);
-                          }}
+                          asChild
                           className="justify-start text-base h-12"
                         >
-                          Library
+                          <Link to="/library" onClick={() => setMobileMenuOpen(false)}>
+                            Library
+                          </Link>
                         </Button>
                         <Button
                           variant="ghost"
@@ -250,12 +247,6 @@ export default function Index() {
       <GratitudeGiftModal
         open={giftModalOpen}
         onOpenChange={setGiftModalOpen}
-      />
-
-      {/* Library Coming Soon Modal */}
-      <LibraryComingSoonModal
-        open={libraryModalOpen}
-        onOpenChange={setLibraryModalOpen}
       />
     </Tabs>
   );
