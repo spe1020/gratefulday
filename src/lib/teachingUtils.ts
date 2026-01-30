@@ -4,6 +4,7 @@
  */
 
 import teachingsData from './data/teachings.json';
+import { getTotalDaysInYear } from './gratitudeUtils';
 
 export type TeachingTradition = 'Christian' | 'Jewish' | 'Islamic' | 'Buddhist' | 'Taoist' | 'Stoic';
 
@@ -57,4 +58,14 @@ export function getTeachingForDay(dayOfYear: number): Teaching | null {
 
   const withinIndex = Math.floor((dayOfYear - 1) / TEACHING_TRADITIONS.length) % byTradition.length;
   return byTradition[withinIndex] ?? null;
+}
+
+/**
+ * Get the teaching for "tomorrow" (next day of year, wrapping at year boundary).
+ * Used for "New teaching tomorrow" indicator.
+ */
+export function getNextTeachingForDay(dayOfYear: number, year: number): Teaching | null {
+  const totalDays = getTotalDaysInYear(year);
+  const nextDay = dayOfYear + 1 > totalDays ? 1 : dayOfYear + 1;
+  return getTeachingForDay(nextDay);
 }
