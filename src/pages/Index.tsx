@@ -18,6 +18,7 @@ import { GratitudeGiftModal } from '@/components/GratitudeGiftModal';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Menu } from 'lucide-react';
+import { Footer } from '@/components/Footer';
 
 export default function Index() {
   useHead({
@@ -231,16 +232,7 @@ export default function Index() {
           </TabsContent>
         </section>
 
-        {/* Footer */}
-        <footer className="border-t border-amber-200 dark:border-gray-800 bg-white/60 dark:bg-gray-950/60 backdrop-blur-sm">
-          <div className="container mx-auto px-4 py-8">
-            <div className="text-center">
-              <p className="text-sm text-muted-foreground">
-                Made with gratitude. Powered by Nostr 💜
-              </p>
-            </div>
-          </div>
-        </footer>
+        <Footer />
       </div>
 
       {/* Gratitude Gift Modal */}

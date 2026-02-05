@@ -2,6 +2,7 @@ import { useMemo, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useHead } from '@unhead/react';
 import { Search, Check, BookOpen } from 'lucide-react';
+import { Footer } from '@/components/Footer';
 import {
   getTeachings,
   TEACHING_CATEGORIES,
@@ -332,14 +333,7 @@ export default function Library() {
         </div>
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-amber-200 dark:border-gray-800 bg-white/60 dark:bg-gray-950/60 backdrop-blur-sm mt-12">
-        <div className="container mx-auto px-4 py-6">
-          <p className="text-sm text-muted-foreground text-center">
-            Made with gratitude. Powered by Nostr 💜
-          </p>
-        </div>
-      </footer>
+      <Footer />
 
       {/* Detail dialog */}
       <Dialog
