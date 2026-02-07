@@ -1,5 +1,5 @@
-import { useState, useCallback } from 'react';
-import { Settings, Sun, Moon, Monitor, X, RotateCcw } from 'lucide-react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { Settings, Sun, Moon, Monitor, X, RotateCcw, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -7,7 +7,6 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog';
 import {
   Drawer,
@@ -16,7 +15,6 @@ import {
   DrawerDescription,
   DrawerHeader,
   DrawerTitle,
-  DrawerTrigger,
 } from '@/components/ui/drawer';
 import { Separator } from '@/components/ui/separator';
 import { Slider } from '@/components/ui/slider';
@@ -35,7 +33,8 @@ import {
 } from 'recharts';
 
 interface SettingsModalProps {
-  children?: React.ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 const themeOptions: { value: Theme; label: string; icon: React.ReactNode }[] = [
@@ -48,6 +47,18 @@ function SettingsContent() {
   const { theme, setTheme } = useTheme();
   const { config, updateConfig } = useAppContext();
   const preferences = config.teachingPreferences;
+  const [saved, setSaved] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const flashSaved = useCallback(() => {
+    setSaved(true);
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setSaved(false), 1500);
+  }, []);
+
+  useEffect(() => {
+    return () => clearTimeout(timerRef.current);
+  }, []);
 
   const radarData = TEACHING_TRADITIONS.map((tradition) => ({
     tradition,
@@ -62,14 +73,21 @@ function SettingsContent() {
         [tradition]: value,
       },
     }));
-  }, [updateConfig]);
+    flashSaved();
+  }, [updateConfig, flashSaved]);
 
   const resetPreferences = useCallback(() => {
     updateConfig((current) => ({
       ...current,
       teachingPreferences: { ...DEFAULT_TEACHING_PREFERENCES },
     }));
-  }, [updateConfig]);
+    flashSaved();
+  }, [updateConfig, flashSaved]);
+
+  const handleSetTheme = useCallback((t: Theme) => {
+    setTheme(t);
+    flashSaved();
+  }, [setTheme, flashSaved]);
 
   return (
     <div className="space-y-6 px-4 pb-4">
@@ -80,7 +98,7 @@ function SettingsContent() {
           {themeOptions.map((option) => (
             <button
               key={option.value}
-              onClick={() => setTheme(option.value)}
+              onClick={() => handleSetTheme(option.value)}
               className={`flex-1 flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                 theme === option.value
                   ? 'bg-primary text-primary-foreground'
@@ -155,25 +173,24 @@ function SettingsContent() {
           Higher values mean that tradition appears more often. Set to 0 to exclude.
         </p>
       </div>
+
+      <div className={`flex items-center justify-center gap-1.5 text-xs transition-opacity duration-300 ${saved ? 'opacity-100' : 'opacity-0'}`}>
+        <Check className="h-3.5 w-3.5 text-green-600" />
+        <span className="text-muted-foreground">Saved</span>
+      </div>
     </div>
   );
 }
 
-export function SettingsModal({ children }: SettingsModalProps) {
-  const [open, setOpen] = useState(false);
+export function SettingsModal({ open: controlledOpen, onOpenChange }: SettingsModalProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = onOpenChange ?? setInternalOpen;
   const isMobile = useIsMobile();
 
   if (isMobile) {
     return (
       <Drawer open={open} onOpenChange={setOpen}>
-        <DrawerTrigger asChild>
-          {children || (
-            <Button variant="outline" size="sm">
-              <Settings className="h-4 w-4 mr-2" />
-              Settings
-            </Button>
-          )}
-        </DrawerTrigger>
         <DrawerContent className="h-full">
           <DrawerHeader className="text-center relative">
             <DrawerClose asChild>
@@ -204,14 +221,6 @@ export function SettingsModal({ children }: SettingsModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        {children || (
-          <Button variant="outline" size="sm">
-            <Settings className="h-4 w-4 mr-2" />
-            Settings
-          </Button>
-        )}
-      </DialogTrigger>
       <DialogContent className="sm:max-w-[500px] max-h-[80vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">

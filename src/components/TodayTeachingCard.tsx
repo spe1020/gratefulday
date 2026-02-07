@@ -1,6 +1,6 @@
 import { useMemo, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, BookMarked, Sparkles, RefreshCw, Share2 } from 'lucide-react';
+import { ChevronDown, BookMarked, Sparkles, RefreshCw, Share2, Settings } from 'lucide-react';
 import {
   Collapsible,
   CollapsibleContent,
@@ -13,6 +13,7 @@ import { useIsMobile } from '@/hooks/useIsMobile';
 import { useAppContext } from '@/hooks/useAppContext';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { ShareTeachingModal } from '@/components/ShareTeachingModal';
+import { SettingsModal } from '@/components/SettingsModal';
 import { cn } from '@/lib/utils';
 
 interface TodayTeachingCardProps {
@@ -37,6 +38,7 @@ export function TodayTeachingCard({
   });
 
   const [shuffle, setShuffle] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const teaching = useMemo(
     () => getTeachingForDay(dayOfYear, preferences, shuffle),
@@ -104,22 +106,40 @@ export function TodayTeachingCard({
                   — {teaching.title}
                 </span>
               </div>
-              <span
-                role="button"
-                tabIndex={0}
-                onClick={handleRefresh}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    handleRefresh(e as unknown as React.MouseEvent);
-                  }
-                }}
-                className="shrink-0 text-muted-foreground hover:text-foreground transition-colors p-1 rounded -mr-1"
-                aria-label="Get another teaching"
-              >
-                <RefreshCw className="h-4 w-4" />
-              </span>
+              <div className="flex items-center shrink-0 -mr-1">
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => { e.stopPropagation(); setSettingsOpen(true); }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setSettingsOpen(true);
+                    }
+                  }}
+                  className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded"
+                  aria-label="Teaching preferences"
+                >
+                  <Settings className="h-4 w-4" />
+                </span>
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={handleRefresh}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleRefresh(e as unknown as React.MouseEvent);
+                    }
+                  }}
+                  className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded"
+                  aria-label="Get another teaching"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                </span>
+              </div>
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent>
@@ -202,6 +222,7 @@ export function TodayTeachingCard({
           </CollapsibleContent>
         </Card>
       </Collapsible>
+      <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
   );
 }
