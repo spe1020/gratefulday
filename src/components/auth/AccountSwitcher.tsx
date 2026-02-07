@@ -1,6 +1,7 @@
 // NOTE: This file is stable and usually should not be modified.
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
 
+import { useState } from 'react';
 import { ChevronDown, LogOut, Settings, UserIcon, UserPlus, Wallet } from 'lucide-react';
 import {
   DropdownMenu,
@@ -21,6 +22,7 @@ interface AccountSwitcherProps {
 
 export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
   const { currentUser, otherUsers, setLogin, removeLogin } = useLoggedInAccounts();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   if (!currentUser) return null;
 
@@ -29,6 +31,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
   }
 
   return (
+    <>
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger asChild>
         <button className='flex items-center gap-3 p-3 rounded-full hover:bg-accent transition-all w-full text-foreground'>
@@ -70,15 +73,13 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
             <span>Wallet Settings</span>
           </DropdownMenuItem>
         </WalletModal>
-        <SettingsModal>
-          <DropdownMenuItem
-            className='flex items-center gap-2 cursor-pointer p-2 rounded-md'
-            onSelect={(e) => e.preventDefault()}
-          >
-            <Settings className='w-4 h-4' />
-            <span>Settings</span>
-          </DropdownMenuItem>
-        </SettingsModal>
+        <DropdownMenuItem
+          onClick={() => setSettingsOpen(true)}
+          className='flex items-center gap-2 cursor-pointer p-2 rounded-md'
+        >
+          <Settings className='w-4 h-4' />
+          <span>Settings</span>
+        </DropdownMenuItem>
         <DropdownMenuItem
           onClick={onAddAccountClick}
           className='flex items-center gap-2 cursor-pointer p-2 rounded-md'
@@ -95,5 +96,7 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} />
+    </>
   );
 }
