@@ -1,6 +1,6 @@
 import { useMemo, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, BookMarked, Sparkles, RefreshCw, Share2, Settings } from 'lucide-react';
+import { ChevronDown, BookMarked, RefreshCw, Share2, Settings } from 'lucide-react';
 import {
   Collapsible,
   CollapsibleContent,
@@ -8,7 +8,7 @@ import {
 } from '@/components/ui/collapsible';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { getTeachingForDay, getNextTeachingForDay, formatTeachingNote } from '@/lib/teachingUtils';
+import { getTeachingForDay, formatTeachingNote } from '@/lib/teachingUtils';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useAppContext } from '@/hooks/useAppContext';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
@@ -18,13 +18,11 @@ import { cn } from '@/lib/utils';
 
 interface TodayTeachingCardProps {
   dayOfYear: number;
-  year: number;
   defaultOpen?: boolean;
 }
 
 export function TodayTeachingCard({
   dayOfYear,
-  year,
   defaultOpen = true,
 }: TodayTeachingCardProps) {
   const isMobile = useIsMobile();
@@ -44,11 +42,6 @@ export function TodayTeachingCard({
     () => getTeachingForDay(dayOfYear, preferences, shuffle),
     [dayOfYear, preferences, shuffle],
   );
-  const nextTeaching = useMemo(
-    () => getNextTeachingForDay(dayOfYear, year, preferences),
-    [dayOfYear, year, preferences],
-  );
-
   const handleRefresh = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     setShuffle((s) => s + 1);
@@ -170,9 +163,24 @@ export function TodayTeachingCard({
                     {teaching.scripture}
                   </p>
                 </div>
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-1">
-                  <div className="flex items-center gap-2">
-                    <Link to="/library">
+                <div className="flex items-center gap-2 pt-1">
+                  <Link to="/library">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className={cn(
+                        'border-amber-300 dark:border-amber-700',
+                        'text-amber-700 dark:text-amber-300',
+                        'hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:border-amber-400 dark:hover:border-amber-600',
+                        'gap-1.5 transition-colors duration-200'
+                      )}
+                    >
+                      <BookMarked className="h-4 w-4" />
+                      Library
+                    </Button>
+                  </Link>
+                  {user && (
+                    <ShareTeachingModal defaultContent={noteContent}>
                       <Button
                         variant="outline"
                         size="sm"
@@ -183,38 +191,10 @@ export function TodayTeachingCard({
                           'gap-1.5 transition-colors duration-200'
                         )}
                       >
-                        <BookMarked className="h-4 w-4" />
-                        Explore more teachings →
+                        <Share2 className="h-4 w-4" />
+                        Share
                       </Button>
-                    </Link>
-                    {user && (
-                      <ShareTeachingModal defaultContent={noteContent}>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className={cn(
-                            'border-amber-300 dark:border-amber-700',
-                            'text-amber-700 dark:text-amber-300',
-                            'hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:border-amber-400 dark:hover:border-amber-600',
-                            'gap-1.5 transition-colors duration-200'
-                          )}
-                        >
-                          <Share2 className="h-4 w-4" />
-                          Share on Nostr
-                        </Button>
-                      </ShareTeachingModal>
-                    )}
-                  </div>
-                  {nextTeaching && (
-                    <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-                      <Sparkles className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" aria-hidden />
-                      New teaching tomorrow
-                      {nextTeaching.tradition && (
-                        <span className="text-amber-600 dark:text-amber-400">
-                          • {nextTeaching.tradition}
-                        </span>
-                      )}
-                    </p>
+                    </ShareTeachingModal>
                   )}
                 </div>
               </div>
