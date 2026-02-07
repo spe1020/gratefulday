@@ -26,6 +26,7 @@ const AppConfigSchema = z.object({
   theme: z.enum(['dark', 'light', 'system']),
   relayMetadata: RelayMetadataSchema,
   defaultWalletApp: z.enum(['alby', 'breez', 'zeus', 'phoenix', 'wallet-of-satoshi', 'none']),
+  teachingPreferences: z.record(z.string(), z.number().min(0).max(100)),
 }) satisfies z.ZodType<AppConfig>;
 
 export function AppProvider(props: AppProviderProps) {

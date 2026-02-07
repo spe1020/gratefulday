@@ -6,6 +6,7 @@ import NostrProvider from '@/components/NostrProvider';
 import { AppProvider } from '@/components/AppProvider';
 import { NWCProvider } from '@/contexts/NWCContext';
 import { AppConfig } from '@/contexts/AppContext';
+import { DEFAULT_TEACHING_PREFERENCES } from '@/lib/teachingUtils';
 
 interface TestAppProps {
   children: React.ReactNode;
@@ -30,6 +31,7 @@ export function TestApp({ children }: TestAppProps) {
       updatedAt: 0,
     },
     defaultWalletApp: 'none',
+    teachingPreferences: DEFAULT_TEACHING_PREFERENCES,
   };
 
   return (

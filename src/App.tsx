@@ -13,6 +13,7 @@ import { NostrLoginProvider } from '@nostrify/react/login';
 import { AppProvider } from '@/components/AppProvider';
 import { NWCProvider } from '@/contexts/NWCContext';
 import { AppConfig } from '@/contexts/AppContext';
+import { DEFAULT_TEACHING_PREFERENCES } from '@/lib/teachingUtils';
 import AppRouter from './AppRouter';
 
 const head = createHead({
@@ -44,6 +45,7 @@ const defaultConfig: AppConfig = {
     updatedAt: 0,
   },
   defaultWalletApp: 'none',
+  teachingPreferences: DEFAULT_TEACHING_PREFERENCES,
 };
 
 export function App() {

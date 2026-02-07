@@ -11,6 +11,9 @@ export interface RelayMetadata {
 
 export type WalletApp = 'alby' | 'breez' | 'zeus' | 'phoenix' | 'wallet-of-satoshi' | 'none';
 
+/** Per-tradition weight from 0 to 100 controlling daily teaching selection */
+export type TeachingPreferences = Record<string, number>;
+
 export interface AppConfig {
   /** Current theme */
   theme: Theme;
@@ -18,6 +21,8 @@ export interface AppConfig {
   relayMetadata: RelayMetadata;
   /** Default Lightning wallet app for opening invoices */
   defaultWalletApp: WalletApp;
+  /** Teaching tradition weights (0–100) for weighted daily selection */
+  teachingPreferences: TeachingPreferences;
 }
 
 export interface AppContextType {

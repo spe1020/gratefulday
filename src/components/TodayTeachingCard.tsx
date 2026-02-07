@@ -1,6 +1,6 @@
-import { useMemo, useState, useCallback, useEffect } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, BookMarked, Sparkles } from 'lucide-react';
+import { ChevronDown, BookMarked, Sparkles, RefreshCw, Share2 } from 'lucide-react';
 import {
   Collapsible,
   CollapsibleContent,
@@ -8,32 +8,12 @@ import {
 } from '@/components/ui/collapsible';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { getTeachingForDay, getNextTeachingForDay } from '@/lib/teachingUtils';
+import { getTeachingForDay, getNextTeachingForDay, formatTeachingNote } from '@/lib/teachingUtils';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useAppContext } from '@/hooks/useAppContext';
+import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { ShareTeachingModal } from '@/components/ShareTeachingModal';
 import { cn } from '@/lib/utils';
-
-const SKIP_STORAGE_KEY = 'gratefulday-teaching-skip-count';
-const SKIP_THRESHOLD = 3;
-
-function getSkipCount(): number {
-  try {
-    const raw = localStorage.getItem(SKIP_STORAGE_KEY);
-    if (!raw) return 0;
-    const n = parseInt(raw, 10);
-    return Number.isFinite(n) ? n : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function incrementSkipCount(): void {
-  try {
-    const count = getSkipCount() + 1;
-    localStorage.setItem(SKIP_STORAGE_KEY, String(count));
-  } catch {
-    // ignore
-  }
-}
 
 interface TodayTeachingCardProps {
   dayOfYear: number;
@@ -47,26 +27,35 @@ export function TodayTeachingCard({
   defaultOpen = true,
 }: TodayTeachingCardProps) {
   const isMobile = useIsMobile();
-  const skipCount = useMemo(() => getSkipCount(), []);
-  const preferCollapsed = skipCount >= SKIP_THRESHOLD;
+  const { config } = useAppContext();
+  const preferences = config.teachingPreferences;
+  const { user } = useCurrentUser();
 
   const [open, setOpen] = useState(() => {
-    if (preferCollapsed) return false;
     if (isMobile) return false;
     return defaultOpen;
   });
 
-  const teaching = useMemo(() => getTeachingForDay(dayOfYear), [dayOfYear]);
+  const [shuffle, setShuffle] = useState(0);
+
+  const teaching = useMemo(
+    () => getTeachingForDay(dayOfYear, preferences, shuffle),
+    [dayOfYear, preferences, shuffle],
+  );
   const nextTeaching = useMemo(
-    () => getNextTeachingForDay(dayOfYear, year),
-    [dayOfYear, year]
+    () => getNextTeachingForDay(dayOfYear, year, preferences),
+    [dayOfYear, year, preferences],
   );
 
-  const handleSkip = useCallback((e: React.MouseEvent) => {
+  const handleRefresh = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    setOpen(false);
-    incrementSkipCount();
+    setShuffle((s) => s + 1);
   }, []);
+
+  const noteContent = useMemo(
+    () => teaching ? formatTeachingNote(teaching) : '',
+    [teaching],
+  );
 
   if (!teaching) return null;
 
@@ -118,18 +107,18 @@ export function TodayTeachingCard({
               <span
                 role="button"
                 tabIndex={0}
-                onClick={handleSkip}
+                onClick={handleRefresh}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
                     e.stopPropagation();
-                    handleSkip(e as unknown as React.MouseEvent);
+                    handleRefresh(e as unknown as React.MouseEvent);
                   }
                 }}
-                className="shrink-0 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded -mr-1"
-                aria-label="Skip and collapse teaching"
+                className="shrink-0 text-muted-foreground hover:text-foreground transition-colors p-1 rounded -mr-1"
+                aria-label="Get another teaching"
               >
-                Skip →
+                <RefreshCw className="h-4 w-4" />
               </span>
             </button>
           </CollapsibleTrigger>
@@ -162,21 +151,40 @@ export function TodayTeachingCard({
                   </p>
                 </div>
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-1">
-                  <Link to="/library">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className={cn(
-                        'border-amber-300 dark:border-amber-700',
-                        'text-amber-700 dark:text-amber-300',
-                        'hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:border-amber-400 dark:hover:border-amber-600',
-                        'gap-1.5 transition-colors duration-200'
-                      )}
-                    >
-                      <BookMarked className="h-4 w-4" />
-                      Explore more teachings →
-                    </Button>
-                  </Link>
+                  <div className="flex items-center gap-2">
+                    <Link to="/library">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={cn(
+                          'border-amber-300 dark:border-amber-700',
+                          'text-amber-700 dark:text-amber-300',
+                          'hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:border-amber-400 dark:hover:border-amber-600',
+                          'gap-1.5 transition-colors duration-200'
+                        )}
+                      >
+                        <BookMarked className="h-4 w-4" />
+                        Explore more teachings →
+                      </Button>
+                    </Link>
+                    {user && (
+                      <ShareTeachingModal defaultContent={noteContent}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className={cn(
+                            'border-amber-300 dark:border-amber-700',
+                            'text-amber-700 dark:text-amber-300',
+                            'hover:bg-amber-100 dark:hover:bg-amber-900/30 hover:border-amber-400 dark:hover:border-amber-600',
+                            'gap-1.5 transition-colors duration-200'
+                          )}
+                        >
+                          <Share2 className="h-4 w-4" />
+                          Share on Nostr
+                        </Button>
+                      </ShareTeachingModal>
+                    )}
+                  </div>
                   {nextTeaching && (
                     <p className="text-xs text-muted-foreground flex items-center gap-1.5">
                       <Sparkles className="h-3.5 w-3.5 text-amber-500 dark:text-amber-400" aria-hidden />
