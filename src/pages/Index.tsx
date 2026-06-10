@@ -15,6 +15,7 @@ import { Logo } from '@/components/Logo';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { cn } from '@/lib/utils';
 import { GratitudeGiftModal } from '@/components/GratitudeGiftModal';
+import { MilestoneCelebrationDialog } from '@/components/MilestoneCelebrationDialog';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Menu } from 'lucide-react';
@@ -248,6 +249,9 @@ export default function Index() {
         open={giftModalOpen}
         onOpenChange={setGiftModalOpen}
       />
+
+      {/* Milestone Celebration - fires once per newly reached streak milestone */}
+      <MilestoneCelebrationDialog />
     </Tabs>
   );
 }
