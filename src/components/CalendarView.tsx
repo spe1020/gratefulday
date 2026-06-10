@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { TodayHero } from './TodayHero';
+import { StreakBadge } from './StreakBadge';
 import { TodayTeachingCard } from './TodayTeachingCard';
 import { PastDaysList } from './PastDaysList';
 import { DayDetailDialog } from './DayDetailDialog';
@@ -49,6 +50,9 @@ export function CalendarView({ days, entriesByDate }: CalendarViewProps) {
           onOpenDetail={handleOpenDetail}
           totalDays={totalDays}
         />
+
+        {/* Streak strip - hidden when logged out or no entries yet */}
+        <StreakBadge />
 
         {/* Today's Teaching - Open by default when page loads */}
         <TodayTeachingCard dayOfYear={today.dayOfYear} defaultOpen={true} />
