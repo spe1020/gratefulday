@@ -181,16 +181,19 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
 
   // Seed the privacy toggle: an existing entry dictates its own state;
   // otherwise the last-used choice, defaulting Private only when support is
-  // confirmed (bunker-'unknown' defaults Public until proven).
+  // confirmed (bunker-'unknown' defaults Public until proven). When the
+  // signer can't encrypt at all, force Public even for an entry that is
+  // currently encrypted — the toggle is hidden in that state, and seeding
+  // Private would trap the user in fail-closed saves with no way out.
   useEffect(() => {
     if (!open) return;
 
-    if (existingEntry) {
-      setIsPrivate(isEncryptedEntry(existingEntry));
-    } else if (user && canEncrypt) {
-      setIsPrivate(getStoredPrivacyDefault(user.pubkey) ?? (nip44Supported === true));
-    } else {
+    if (!user || !canEncrypt) {
       setIsPrivate(false);
+    } else if (existingEntry) {
+      setIsPrivate(isEncryptedEntry(existingEntry));
+    } else {
+      setIsPrivate(getStoredPrivacyDefault(user.pubkey) ?? (nip44Supported === true));
     }
   }, [open, day, existingEntry, user, canEncrypt, nip44Supported]);
 
