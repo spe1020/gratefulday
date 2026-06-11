@@ -19,13 +19,23 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import { Loader2, Save, Sparkles, Share2, Trash2 } from 'lucide-react';
+import { Globe, Loader2, Lock, Save, Sparkles, Share2, Trash2 } from 'lucide-react';
 import type { DayInfo } from '@/lib/gratitudeUtils';
 import { getQuoteForDay, getAffirmationForDay, formatDisplayDate } from '@/lib/gratitudeUtils';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useGratitudeEntry } from '@/hooks/useGratitudeEntries';
 import { useDeleteGratitudeEntry } from '@/hooks/useDeleteGratitudeEntry';
+import { useNip44Support, cacheNip44Support } from '@/hooks/useNip44Support';
+import { useDecryptedEntry } from '@/hooks/useDecryptedEntry';
+import {
+  ENCRYPTED_ALT,
+  ENCRYPTED_TAG,
+  Nip44UnsupportedError,
+  encryptEntryContent,
+  isEncryptedEntry,
+} from '@/lib/privacyUtils';
+import type { NostrSigner } from '@nostrify/nostrify';
 import { useToast } from '@/hooks/useToast';
 import LoginDialog from './auth/LoginDialog';
 import { nip19 } from 'nostr-tools';
@@ -34,6 +44,78 @@ interface DayDetailDialogProps {
   day: DayInfo | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+}
+
+/** Last-used privacy choice per pubkey; seeds the toggle for new entries. */
+const PRIVACY_DEFAULT_KEY = 'gratefulday:privacy-default:v1';
+/** Pubkeys that have already seen the "signer can't encrypt" hint. */
+const NIP44_HINT_KEY = 'gratefulday:nip44-hint-shown:v1';
+
+function readJsonRecord(key: string): Record<string, boolean> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) ?? '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeJsonRecord(key: string, record: Record<string, boolean>): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(record));
+  } catch {
+    // Persistence unavailable — defaults just won't stick across sessions.
+  }
+}
+
+function getStoredPrivacyDefault(pubkey: string): boolean | undefined {
+  return readJsonRecord(PRIVACY_DEFAULT_KEY)[pubkey];
+}
+
+function storePrivacyDefault(pubkey: string, isPrivate: boolean): void {
+  const record = readJsonRecord(PRIVACY_DEFAULT_KEY);
+  record[pubkey] = isPrivate;
+  writeJsonRecord(PRIVACY_DEFAULT_KEY, record);
+}
+
+function takeNip44HintSlot(pubkey: string): boolean {
+  const record = readJsonRecord(NIP44_HINT_KEY);
+  if (record[pubkey]) return false;
+  record[pubkey] = true;
+  writeJsonRecord(NIP44_HINT_KEY, record);
+  return true;
+}
+
+const ENCRYPT_TIMEOUT_MS = 20_000;
+
+class EncryptTimeoutError extends Error {
+  constructor() {
+    super('Encryption timed out');
+    this.name = 'EncryptTimeoutError';
+  }
+}
+
+/**
+ * Encrypt with a hard timeout. Bunker signers round-trip over relays and can
+ * hang far longer than a user will wait; a timeout is NOT treated as a
+ * capability signal — the save simply fails closed.
+ */
+async function encryptWithTimeout(
+  signer: NostrSigner,
+  pubkey: string,
+  plaintext: string
+): Promise<string> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      encryptEntryContent(signer, pubkey, plaintext),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new EncryptTimeoutError()), ENCRYPT_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -63,7 +145,12 @@ function extractMentionedPubkeys(text: string): string[] {
 export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProps) {
   const [gratitudeText, setGratitudeText] = useState('');
   const [showLoginDialog, setShowLoginDialog] = useState(false);
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [isEncrypting, setIsEncrypting] = useState(false);
+  const [showNip44Hint, setShowNip44Hint] = useState(false);
+  const [showShareGuard, setShowShareGuard] = useState(false);
   const { user } = useCurrentUser();
+  const { supported: nip44Supported } = useNip44Support();
   const { mutate: createEvent, isPending } = useNostrPublish();
   const { mutate: publishNote, isPending: isPublishingNote } = useNostrPublish();
   const { mutate: deleteEntry, isPending: isDeleting } = useDeleteGratitudeEntry();
@@ -74,6 +161,12 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     user?.pubkey,
     day?.dateString || ''
   );
+  const {
+    content: entryContent,
+    isEncrypted: entryIsEncrypted,
+    isDecrypting,
+    decryptError,
+  } = useDecryptedEntry(existingEntry);
 
   // Always start with a fresh empty text box when dialog opens or day changes
   useEffect(() => {
@@ -82,13 +175,109 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     }
   }, [day, open]);
 
+  // Toggle is shown when the signer supports NIP-44 — or optimistically for
+  // bunkers ('unknown'), where support is only discoverable by attempting.
+  const canEncrypt = nip44Supported === true || nip44Supported === 'unknown';
+
+  // Seed the privacy toggle: an existing entry dictates its own state;
+  // otherwise the last-used choice, defaulting Private only when support is
+  // confirmed (bunker-'unknown' defaults Public until proven). When the
+  // signer can't encrypt at all, force Public even for an entry that is
+  // currently encrypted — the toggle is hidden in that state, and seeding
+  // Private would trap the user in fail-closed saves with no way out.
+  useEffect(() => {
+    if (!open) return;
+
+    if (!user || !canEncrypt) {
+      setIsPrivate(false);
+    } else if (existingEntry) {
+      setIsPrivate(isEncryptedEntry(existingEntry));
+    } else {
+      setIsPrivate(getStoredPrivacyDefault(user.pubkey) ?? (nip44Supported === true));
+    }
+  }, [open, day, existingEntry, user, canEncrypt, nip44Supported]);
+
+  // One-time hint when the signer can't encrypt at all.
+  useEffect(() => {
+    if (open && user && nip44Supported === false && !day?.isPast) {
+      setShowNip44Hint(takeNip44HintSlot(user.pubkey));
+    } else {
+      setShowNip44Hint(false);
+    }
+  }, [open, user, nip44Supported, day]);
+
   if (!day) return null;
 
   const quote = getQuoteForDay(day.dayOfYear);
   const affirmation = getAffirmationForDay(day.dayOfYear);
   const isPastDay = day.isPast;
 
-  const handleSave = () => {
+  /**
+   * Build the 36669 event for the current editor state. For private entries
+   * the content is NIP-44 ciphertext encrypted to the user's own pubkey, the
+   * alt tag is generic, and no tag derives from the plaintext. Throws on any
+   * encryption failure — the caller must fail closed, never publish plaintext
+   * the user marked private.
+   */
+  const buildEntryEvent = async (): Promise<{
+    kind: number;
+    content: string;
+    tags: string[][];
+  }> => {
+    if (!user || !day) throw new Error('Not ready');
+
+    const trimmedText = gratitudeText.trim();
+    const timestamp = Math.floor(day.date.getTime() / 1000);
+    const baseTags = [
+      ['d', day.dateString],
+      ['published_at', String(timestamp)],
+      ['day', String(day.dayOfYear)],
+    ];
+
+    if (!isPrivate) {
+      return {
+        kind: 36669,
+        content: trimmedText,
+        tags: [
+          ...baseTags,
+          ['alt', `Daily reflection entry for ${formatDisplayDate(day.date)} (Day ${day.dayOfYear})`],
+        ],
+      };
+    }
+
+    setIsEncrypting(true);
+    try {
+      const ciphertext = await encryptWithTimeout(user.signer, user.pubkey, trimmedText);
+
+      // A definitive success resolves a bunker's 'unknown' capability
+      // permanently. Timeouts and errors cache nothing: a timeout is not a
+      // capability signal, and NIP-46 error strings are free-form — too
+      // unreliable to confidently identify "method unsupported".
+      if (user.method === 'bunker') {
+        cacheNip44Support(user.pubkey, true);
+      }
+
+      return {
+        kind: 36669,
+        content: ciphertext,
+        tags: [...baseTags, [...ENCRYPTED_TAG], ['alt', ENCRYPTED_ALT]],
+      };
+    } finally {
+      setIsEncrypting(false);
+    }
+  };
+
+  const describeEncryptError = (error: unknown): string => {
+    if (error instanceof Nip44UnsupportedError) {
+      return "Your signer doesn't support NIP-44 encryption. Nothing was published — switch to Public to save with this signer.";
+    }
+    if (error instanceof EncryptTimeoutError) {
+      return 'Your signer did not respond in time. Nothing was published — try again or switch to Public.';
+    }
+    return `Encryption failed: ${error instanceof Error ? error.message : 'unknown error'}. Nothing was published.`;
+  };
+
+  const handleSave = async () => {
     if (!user) {
       setShowLoginDialog(true);
       return;
@@ -103,39 +292,42 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
       return;
     }
 
-    const timestamp = Math.floor(day.date.getTime() / 1000);
+    let entryEvent;
+    try {
+      entryEvent = await buildEntryEvent();
+    } catch (error) {
+      // Fail closed: the user chose Private; plaintext must never go out.
+      toast({
+        title: 'Could not encrypt your entry',
+        description: describeEncryptError(error),
+        variant: 'destructive',
+      });
+      return;
+    }
 
-    createEvent(
-      {
-        kind: 36669,
-        content: gratitudeText.trim(),
-        tags: [
-          ['d', day.dateString],
-          ['published_at', String(timestamp)],
-          ['day', String(day.dayOfYear)],
-          ['alt', `Daily reflection entry for ${formatDisplayDate(day.date)} (Day ${day.dayOfYear})`],
-        ],
+    storePrivacyDefault(user.pubkey, isPrivate);
+
+    createEvent(entryEvent, {
+      onSuccess: () => {
+        toast({
+          title: isPrivate ? 'Private reflection saved 🔒' : 'Reflection saved! ✨',
+          description: isPrivate
+            ? 'Encrypted so only you can read it.'
+            : 'Your reflection has been saved.',
+        });
+        setGratitudeText(''); // Reset text box for a fresh entry
       },
-      {
-        onSuccess: () => {
-          toast({
-            title: 'Reflection saved! ✨',
-            description: 'Your reflection has been saved.',
-          });
-          setGratitudeText(''); // Reset text box for a fresh entry
-        },
-        onError: (error) => {
-          toast({
-            title: 'Failed to save',
-            description: error.message || 'Please try again.',
-            variant: 'destructive',
-          });
-        },
-      }
-    );
+      onError: (error) => {
+        toast({
+          title: 'Failed to save',
+          description: error.message || 'Please try again.',
+          variant: 'destructive',
+        });
+      },
+    });
   };
 
-  const handleShareToNostr = () => {
+  const handleShareToNostr = async () => {
     if (!user) {
       setShowLoginDialog(true);
       return;
@@ -150,21 +342,27 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
       return;
     }
 
-    const timestamp = Math.floor(day.date.getTime() / 1000);
     const trimmedText = gratitudeText.trim();
 
-    // First, save as kind 36669
+    // First, save as kind 36669 (encrypted when Private is selected — the
+    // kind 1 note below still shares the plaintext by explicit user action).
+    let entryEvent;
+    try {
+      entryEvent = await buildEntryEvent();
+    } catch (error) {
+      // Fail closed: no journal save, no public note.
+      toast({
+        title: 'Could not encrypt your entry',
+        description: describeEncryptError(error),
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    storePrivacyDefault(user.pubkey, isPrivate);
+
     createEvent(
-      {
-        kind: 36669,
-        content: trimmedText,
-        tags: [
-          ['d', day.dateString],
-          ['published_at', String(timestamp)],
-          ['day', String(day.dayOfYear)],
-          ['alt', `Daily reflection entry for ${formatDisplayDate(day.date)} (Day ${day.dayOfYear})`],
-        ],
-      },
+      entryEvent,
       {
         onSuccess: () => {
           // After saving kind 36669, post as kind 1 note
@@ -229,6 +427,30 @@ https://gratefulday.space`;
         },
       }
     );
+  };
+
+  const handleShareClick = () => {
+    if (!user) {
+      setShowLoginDialog(true);
+      return;
+    }
+    if (!gratitudeText.trim()) {
+      toast({
+        title: 'No reflection to share',
+        description: 'Please write something before sharing.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Sharing a private entry posts its text publicly as a kind 1 —
+    // interpose an explicit confirm before any plaintext leaves the editor.
+    if (isPrivate) {
+      setShowShareGuard(true);
+      return;
+    }
+
+    handleShareToNostr();
   };
 
   const handleDeleteEntry = () => {
@@ -342,14 +564,34 @@ https://gratefulday.space`;
                 <div className="p-4 rounded-lg bg-muted/50 border border-border/50">
                   <div className="flex items-start gap-3">
                     <div className="flex-1">
-                      <p className="text-sm font-medium text-foreground mb-2">
-                        {existingEntry ? 'Your Reflection' : 'No Reflection'}
-                      </p>
+                      <div className="flex items-center gap-2 mb-2">
+                        <p className="text-sm font-medium text-foreground">
+                          {existingEntry ? 'Your Reflection' : 'No Reflection'}
+                        </p>
+                        {entryIsEncrypted && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                            <Lock className="h-3 w-3" />
+                            Private
+                          </span>
+                        )}
+                      </div>
                       {existingEntry ? (
                         <div className="space-y-2">
-                          <p className="text-base text-foreground whitespace-pre-wrap break-words">
-                            {existingEntry.content}
-                          </p>
+                          {isDecrypting ? (
+                            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Decrypting…
+                            </p>
+                          ) : decryptError ? (
+                            <p className="text-sm text-muted-foreground italic">
+                              🔒 Encrypted entry — your current signer can't
+                              decrypt it.
+                            </p>
+                          ) : (
+                            <p className="text-base text-foreground whitespace-pre-wrap break-words">
+                              {entryContent}
+                            </p>
+                          )}
                           <p className="text-xs text-muted-foreground">
                             Last updated: {new Date(existingEntry.created_at * 1000).toLocaleString()}
                           </p>
@@ -383,9 +625,46 @@ https://gratefulday.space`;
                   value={gratitudeText}
                   onChange={setGratitudeText}
                 />
-                <p className="text-xs text-muted-foreground">
-                  {gratitudeText.length} characters
-                </p>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs text-muted-foreground">
+                    {gratitudeText.length} characters
+                  </p>
+                  {user && canEncrypt && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setIsPrivate((p) => !p)}
+                      aria-pressed={isPrivate}
+                      className="gap-1.5 h-8"
+                    >
+                      {isPrivate ? (
+                        <>
+                          <Lock className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                          Private
+                        </>
+                      ) : (
+                        <>
+                          <Globe className="h-3.5 w-3.5" />
+                          Public
+                        </>
+                      )}
+                    </Button>
+                  )}
+                </div>
+                {user && canEncrypt && (
+                  <p className="text-xs text-muted-foreground text-right">
+                    {isPrivate
+                      ? 'Encrypted so only you can read it. The date stays visible.'
+                      : 'Saved as a public note on your relays.'}
+                  </p>
+                )}
+                {showNip44Hint && (
+                  <p className="text-xs text-muted-foreground">
+                    Your signer doesn't support encryption (NIP-44). Entries
+                    will be saved publicly.
+                  </p>
+                )}
               </div>
             )}
 
@@ -419,13 +698,13 @@ https://gratefulday.space`;
                 </Button>
                 <Button
                   onClick={handleSave}
-                  disabled={isPending || isPublishingNote || !gratitudeText.trim()}
+                  disabled={isEncrypting || isPending || isPublishingNote || !gratitudeText.trim()}
                   className="min-w-[100px] order-1 sm:order-2"
                 >
-                  {isPending ? (
+                  {isEncrypting || isPending ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Saving...
+                      {isEncrypting ? 'Encrypting…' : 'Saving...'}
                     </>
                   ) : (
                     <>
@@ -435,15 +714,15 @@ https://gratefulday.space`;
                   )}
                 </Button>
                 <Button
-                  onClick={handleShareToNostr}
-                  disabled={isPending || isPublishingNote || !gratitudeText.trim()}
+                  onClick={handleShareClick}
+                  disabled={isEncrypting || isPending || isPublishingNote || !gratitudeText.trim()}
                   variant="default"
                   className="bg-amber-600 hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600 order-3"
                 >
-                  {isPending || isPublishingNote ? (
+                  {isEncrypting || isPending || isPublishingNote ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      {isPending ? 'Saving...' : 'Sharing...'}
+                      {isEncrypting ? 'Encrypting…' : isPending ? 'Saving...' : 'Sharing...'}
                     </>
                   ) : (
                     <>
@@ -457,6 +736,30 @@ https://gratefulday.space`;
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Share guard for private entries */}
+      <AlertDialog open={showShareGuard} onOpenChange={setShowShareGuard}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Share this private entry?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Sharing posts this text publicly on Nostr. Your journal copy
+              stays encrypted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setShowShareGuard(false);
+                handleShareToNostr();
+              }}
+            >
+              Share publicly
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <LoginDialog
         isOpen={showLoginDialog}
