@@ -7,13 +7,25 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import { Loader2, Save, Sparkles, Share2 } from 'lucide-react';
+import { Loader2, Save, Sparkles, Share2, Trash2 } from 'lucide-react';
 import type { DayInfo } from '@/lib/gratitudeUtils';
 import { getQuoteForDay, getAffirmationForDay, formatDisplayDate } from '@/lib/gratitudeUtils';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useGratitudeEntry } from '@/hooks/useGratitudeEntries';
+import { useDeleteGratitudeEntry } from '@/hooks/useDeleteGratitudeEntry';
 import { useToast } from '@/hooks/useToast';
 import LoginDialog from './auth/LoginDialog';
 import { nip19 } from 'nostr-tools';
@@ -54,6 +66,7 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   const { user } = useCurrentUser();
   const { mutate: createEvent, isPending } = useNostrPublish();
   const { mutate: publishNote, isPending: isPublishingNote } = useNostrPublish();
+  const { mutate: deleteEntry, isPending: isDeleting } = useDeleteGratitudeEntry();
   const { toast } = useToast();
 
   // Fetch existing entry for this day (only for display in past days, not for editing)
@@ -218,6 +231,68 @@ https://gratefulday.space`;
     );
   };
 
+  const handleDeleteEntry = () => {
+    if (!existingEntry) return;
+
+    deleteEntry(existingEntry, {
+      onSuccess: () => {
+        toast({
+          title: 'Deletion requested',
+          description:
+            'Your relays were asked to remove this entry. Removal is best-effort and copies may persist.',
+        });
+        onOpenChange(false);
+      },
+      onError: (error) => {
+        toast({
+          title: 'Failed to request deletion',
+          description: error.message || 'Please try again.',
+          variant: 'destructive',
+        });
+      },
+    });
+  };
+
+  const canDelete = !!existingEntry && !!user && existingEntry.pubkey === user.pubkey;
+
+  const deleteEntryButton = canDelete ? (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button
+          variant="ghost"
+          disabled={isDeleting}
+          className="text-destructive hover:text-destructive hover:bg-destructive/10"
+        >
+          {isDeleting ? (
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+          ) : (
+            <Trash2 className="h-4 w-4 mr-2" />
+          )}
+          {isDeleting ? 'Deleting…' : 'Delete entry'}
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This sends a deletion request to your relays. Most relays honor it,
+            but deletion on a decentralized network is best-effort and copies
+            may persist.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={handleDeleteEntry}
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          >
+            Request deletion
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  ) : null;
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -316,11 +391,13 @@ https://gratefulday.space`;
 
             {/* Action Buttons */}
             {isPastDay ? (
-              /* Past Day - Only Close Button */
-              <div className="flex justify-end">
+              /* Past Day - Close (and Delete when an entry exists) */
+              <div className="flex items-center gap-3">
+                {deleteEntryButton}
                 <Button
                   variant="outline"
                   onClick={() => onOpenChange(false)}
+                  className="ml-auto"
                 >
                   Close
                 </Button>
@@ -328,6 +405,11 @@ https://gratefulday.space`;
             ) : (
               /* Today - Full Action Buttons */
               <div className="flex flex-col sm:flex-row gap-3 justify-end">
+                {deleteEntryButton && (
+                  <div className="order-4 sm:order-first sm:mr-auto">
+                    {deleteEntryButton}
+                  </div>
+                )}
                 <Button
                   variant="outline"
                   onClick={() => onOpenChange(false)}

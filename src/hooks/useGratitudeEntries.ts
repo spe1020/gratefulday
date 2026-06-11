@@ -1,9 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNostr } from '@nostrify/react';
 import type { NostrEvent } from '@nostrify/nostrify';
+import { dedupeEntriesByDTag } from '@/lib/streakUtils';
+import { getEntryTombstones, isEntryTombstoned } from '@/lib/entryTombstones';
 
 /**
- * Hook to fetch all gratitude entries for a specific user
+ * Hook to fetch all gratitude entries for a specific user.
+ *
+ * Results are validated, filtered against local deletion tombstones, and
+ * deduped latest-wins per `d` tag, so consumers never depend on relay-side
+ * replacement or deletion behavior.
  */
 export function useGratitudeEntries(pubkey: string | undefined) {
   const { nostr } = useNostr();
@@ -19,13 +25,18 @@ export function useGratitudeEntries(pubkey: string | undefined) {
           {
             kinds: [36669],
             authors: [pubkey],
-            limit: 366, // Max days in a year
+            // Over-fetch past one year of days to tolerate transient
+            // duplicates from relays that don't replace addressable events.
+            limit: 500,
           },
         ],
         { signal }
       );
 
-      return events;
+      const tombstones = getEntryTombstones();
+      return dedupeEntriesByDTag(
+        events.filter((e) => validateGratitudeEntry(e) && !isEntryTombstoned(e, tombstones))
+      );
     },
     enabled: !!pubkey,
   });
@@ -49,13 +60,23 @@ export function useGratitudeEntry(pubkey: string | undefined, dateString: string
             kinds: [36669],
             authors: [pubkey],
             '#d': [dateString],
-            limit: 1,
+            // Tolerate stale duplicates from non-replacing relays; the
+            // newest version wins below.
+            limit: 5,
           },
         ],
         { signal }
       );
 
-      return events[0] || null;
+      const tombstones = getEntryTombstones();
+      const candidates = events.filter(
+        (e) => validateGratitudeEntry(e) && !isEntryTombstoned(e, tombstones)
+      );
+
+      return candidates.reduce<NostrEvent | null>(
+        (newest, e) => (!newest || e.created_at > newest.created_at ? e : newest),
+        null
+      );
     },
     enabled: !!pubkey && !!dateString,
   });
@@ -75,13 +96,38 @@ export function useCommunityGratitude(limit: number = 20) {
         [
           {
             kinds: [36669],
-            limit,
+            // Over-fetch: validation, encrypted-entry exclusion, and dedup
+            // below shrink the result, and the feed should stay full.
+            limit: limit * 2,
           },
         ],
         { signal }
       );
 
-      return events;
+      // Encrypted entries are personal — their ciphertext must never render
+      // in the community feed.
+      const tombstones = getEntryTombstones();
+      const visible = events.filter(
+        (e) =>
+          validateGratitudeEntry(e) &&
+          !isEntryTombstoned(e, tombstones) &&
+          !e.tags.some(([name]) => name === 'encrypted')
+      );
+
+      // Latest-wins per author + d tag.
+      const byAddress = new Map<string, NostrEvent>();
+      for (const event of visible) {
+        const dTag = event.tags.find(([name]) => name === 'd')?.[1];
+        const address = `${event.pubkey}:${dTag}`;
+        const existing = byAddress.get(address);
+        if (!existing || event.created_at > existing.created_at) {
+          byAddress.set(address, event);
+        }
+      }
+
+      return [...byAddress.values()]
+        .sort((a, b) => b.created_at - a.created_at)
+        .slice(0, limit);
     },
   });
 }
