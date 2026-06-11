@@ -1,19 +1,11 @@
+// @vitest-environment node
+// Real-crypto round trips: jsdom's TextEncoder produces cross-realm
+// Uint8Arrays that @noble/hashes rejects, so this file runs in node.
+
 import { describe, it, expect } from 'vitest';
+import { generateSecretKey, getPublicKey } from 'nostr-tools';
+import { NSecSigner } from '@nostrify/nostrify';
 import type { NostrEvent, NostrSigner } from '@nostrify/nostrify';
-
-// In the jsdom environment TextEncoder.encode returns a Uint8Array from a
-// different realm, which @noble/hashes rejects ("Uint8Array expected").
-// Wrap it to re-create output with this realm's Uint8Array before the
-// crypto libraries capture it — hence the dynamic imports below.
-const BaseTextEncoder = globalThis.TextEncoder;
-globalThis.TextEncoder = class extends BaseTextEncoder {
-  encode(input?: string): Uint8Array {
-    return Uint8Array.from(super.encode(input));
-  }
-};
-
-const { generateSecretKey, getPublicKey } = await import('nostr-tools');
-const { NSecSigner } = await import('@nostrify/nostrify');
 import {
   ENCRYPTED_ALT,
   ENCRYPTED_TAG,
