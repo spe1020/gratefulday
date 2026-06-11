@@ -27,6 +27,7 @@ import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useGratitudeEntry } from '@/hooks/useGratitudeEntries';
 import { useDeleteGratitudeEntry } from '@/hooks/useDeleteGratitudeEntry';
 import { useNip44Support, cacheNip44Support } from '@/hooks/useNip44Support';
+import { useDecryptedEntry } from '@/hooks/useDecryptedEntry';
 import {
   ENCRYPTED_ALT,
   ENCRYPTED_TAG,
@@ -147,6 +148,7 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   const [isPrivate, setIsPrivate] = useState(false);
   const [isEncrypting, setIsEncrypting] = useState(false);
   const [showNip44Hint, setShowNip44Hint] = useState(false);
+  const [showShareGuard, setShowShareGuard] = useState(false);
   const { user } = useCurrentUser();
   const { supported: nip44Supported } = useNip44Support();
   const { mutate: createEvent, isPending } = useNostrPublish();
@@ -159,6 +161,12 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     user?.pubkey,
     day?.dateString || ''
   );
+  const {
+    content: entryContent,
+    isEncrypted: entryIsEncrypted,
+    isDecrypting,
+    decryptError,
+  } = useDecryptedEntry(existingEntry);
 
   // Always start with a fresh empty text box when dialog opens or day changes
   useEffect(() => {
@@ -418,6 +426,30 @@ https://gratefulday.space`;
     );
   };
 
+  const handleShareClick = () => {
+    if (!user) {
+      setShowLoginDialog(true);
+      return;
+    }
+    if (!gratitudeText.trim()) {
+      toast({
+        title: 'No reflection to share',
+        description: 'Please write something before sharing.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Sharing a private entry posts its text publicly as a kind 1 —
+    // interpose an explicit confirm before any plaintext leaves the editor.
+    if (isPrivate) {
+      setShowShareGuard(true);
+      return;
+    }
+
+    handleShareToNostr();
+  };
+
   const handleDeleteEntry = () => {
     if (!existingEntry) return;
 
@@ -529,14 +561,34 @@ https://gratefulday.space`;
                 <div className="p-4 rounded-lg bg-muted/50 border border-border/50">
                   <div className="flex items-start gap-3">
                     <div className="flex-1">
-                      <p className="text-sm font-medium text-foreground mb-2">
-                        {existingEntry ? 'Your Reflection' : 'No Reflection'}
-                      </p>
+                      <div className="flex items-center gap-2 mb-2">
+                        <p className="text-sm font-medium text-foreground">
+                          {existingEntry ? 'Your Reflection' : 'No Reflection'}
+                        </p>
+                        {entryIsEncrypted && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                            <Lock className="h-3 w-3" />
+                            Private
+                          </span>
+                        )}
+                      </div>
                       {existingEntry ? (
                         <div className="space-y-2">
-                          <p className="text-base text-foreground whitespace-pre-wrap break-words">
-                            {existingEntry.content}
-                          </p>
+                          {isDecrypting ? (
+                            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Decrypting…
+                            </p>
+                          ) : decryptError ? (
+                            <p className="text-sm text-muted-foreground italic">
+                              🔒 Encrypted entry — your current signer can't
+                              decrypt it.
+                            </p>
+                          ) : (
+                            <p className="text-base text-foreground whitespace-pre-wrap break-words">
+                              {entryContent}
+                            </p>
+                          )}
                           <p className="text-xs text-muted-foreground">
                             Last updated: {new Date(existingEntry.created_at * 1000).toLocaleString()}
                           </p>
@@ -659,7 +711,7 @@ https://gratefulday.space`;
                   )}
                 </Button>
                 <Button
-                  onClick={handleShareToNostr}
+                  onClick={handleShareClick}
                   disabled={isEncrypting || isPending || isPublishingNote || !gratitudeText.trim()}
                   variant="default"
                   className="bg-amber-600 hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600 order-3"
@@ -681,6 +733,30 @@ https://gratefulday.space`;
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Share guard for private entries */}
+      <AlertDialog open={showShareGuard} onOpenChange={setShowShareGuard}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Share this private entry?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Sharing posts this text publicly on Nostr. Your journal copy
+              stays encrypted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setShowShareGuard(false);
+                handleShareToNostr();
+              }}
+            >
+              Share publicly
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <LoginDialog
         isOpen={showLoginDialog}
