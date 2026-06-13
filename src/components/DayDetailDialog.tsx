@@ -19,7 +19,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import { Globe, Loader2, Lock, Plus, Save, Sparkles, Share2, Trash2 } from 'lucide-react';
+import { Globe, Loader2, Lock, Plus, Save, Sparkles, Share2, Trash2, X } from 'lucide-react';
 import type { DayInfo } from '@/lib/gratitudeUtils';
 import { getQuoteForDay, getAffirmationForDay, formatDisplayDate } from '@/lib/gratitudeUtils';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
@@ -36,7 +36,7 @@ import {
   isEncryptedEntry,
 } from '@/lib/privacyUtils';
 import type { NostrSigner } from '@nostrify/nostrify';
-import { normalizeNotes, splitNotes } from '@/lib/entryNotes';
+import { joinNotes, splitNotes } from '@/lib/entryNotes';
 import { useToast } from '@/hooks/useToast';
 import LoginDialog from './auth/LoginDialog';
 import { nip19 } from 'nostr-tools';
@@ -144,8 +144,12 @@ function extractMentionedPubkeys(text: string): string[] {
 }
 
 export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProps) {
-  const [gratitudeText, setGratitudeText] = useState('');
-  const editorRef = useRef<AutocompleteTextareaHandle>(null);
+  // Each note is its own editor box; the day still saves as one 36669.
+  const [notes, setNotes] = useState<string[]>(['']);
+  const editorRefs = useRef<Array<AutocompleteTextareaHandle | null>>([]);
+  // Set by "Add another moment" so the focus effect targets the new box only
+  // when the user added one — never when an existing entry seeds N boxes.
+  const pendingFocusRef = useRef(false);
   const [showLoginDialog, setShowLoginDialog] = useState(false);
   const [isPrivate, setIsPrivate] = useState(false);
   const [isEncrypting, setIsEncrypting] = useState(false);
@@ -187,8 +191,8 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     if (seededKeyRef.current === key) return;
 
     if (!existingEntry) {
-      // No saved entry: fresh empty editor (seeded once).
-      setGratitudeText('');
+      // No saved entry: a single fresh empty box (seeded once).
+      setNotes(['']);
       seededKeyRef.current = key;
       return;
     }
@@ -199,18 +203,27 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     if (decryptError) {
       // Fail-closed: couldn't read it, so don't seed plaintext. Latch to stop
       // re-firing; the locked UI + disabled save/share guard the rest.
-      setGratitudeText('');
+      setNotes(['']);
       seededKeyRef.current = key;
       return;
     }
 
-    // Successful decrypt or plaintext passthrough.
-    setGratitudeText(entryContent);
+    // Successful decrypt or plaintext passthrough: split into one box per note.
+    const seeded = splitNotes(entryContent);
+    setNotes(seeded.length > 0 ? seeded : ['']);
     seededKeyRef.current = key;
     // Keyed on existingEntry?.id, not the object: a background refetch that
     // returns an identity-changed-but-same entry must not re-fire seeding.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, day?.dateString, existingEntry?.id, isDecrypting, decryptError, entryContent]);
+
+  // Focus a newly added box after it mounts (keyed on count, gated by the
+  // pending flag so seeding N boxes on open never steals focus).
+  useEffect(() => {
+    if (!pendingFocusRef.current) return;
+    pendingFocusRef.current = false;
+    editorRefs.current[notes.length - 1]?.focus();
+  }, [notes.length]);
 
   // Toggle is shown when the signer supports NIP-44 — or optimistically for
   // bunkers ('unknown'), where support is only discoverable by attempting.
@@ -257,9 +270,29 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   const entryLocked = hasExistingEntry && !!decryptError;
   const blockSaveShare = entrySeeding || entryLocked;
 
-  // A day can hold multiple notes inside the one entry; blank lines delimit them.
-  const noteCount = splitNotes(gratitudeText).length;
+  // A day can hold multiple notes inside the one entry. The editor keeps them
+  // as separate boxes; the saved content is the non-empty notes joined.
+  const joinedNotes = joinNotes(notes);
+  const hasContent = joinedNotes.length > 0;
+  const filledNoteCount = notes.filter((note) => note.trim().length > 0).length;
   const readOnlyNotes = splitNotes(entryContent);
+
+  const updateNote = (index: number, value: string) => {
+    setNotes((prev) => prev.map((note, i) => (i === index ? value : note)));
+  };
+
+  const addNote = () => {
+    pendingFocusRef.current = true;
+    setNotes((prev) => [...prev, '']);
+  };
+
+  const removeNote = (index: number) => {
+    // Never drop to zero boxes — keep one empty box to write into.
+    setNotes((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      return next.length > 0 ? next : [''];
+    });
+  };
 
   /**
    * Build the 36669 event for the current editor state. For private entries
@@ -276,8 +309,9 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     if (!user || !day) throw new Error('Not ready');
 
     // All of the day's notes live inside the single 36669, blank-line
-    // delimited — one event per day stays the architecture.
-    const trimmedText = normalizeNotes(gratitudeText);
+    // delimited — one event per day stays the architecture. joinNotes drops
+    // empty boxes, so a freshly added moment left blank never persists.
+    const trimmedText = joinNotes(notes);
     const timestamp = Math.floor(day.date.getTime() / 1000);
     const baseTags = [
       ['d', day.dateString],
@@ -338,7 +372,7 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     // decrypt — an empty/partial editor could overwrite content not yet seen.
     if (blockSaveShare) return;
 
-    if (!gratitudeText.trim()) {
+    if (!hasContent) {
       toast({
         title: 'Empty entry',
         description: 'Please write something before saving.',
@@ -391,7 +425,7 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
 
     if (blockSaveShare) return;
 
-    if (!gratitudeText.trim()) {
+    if (!hasContent) {
       toast({
         title: 'No reflection to share',
         description: 'Please write something before sharing.',
@@ -402,7 +436,7 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
 
     // Share posts all of the day's notes (blank-line separated) — NoteContent
     // renders them as paragraphs in the feed and other clients.
-    const trimmedText = normalizeNotes(gratitudeText);
+    const trimmedText = joinedNotes;
 
     // First, save as kind 36669 (encrypted when Private is selected — the
     // kind 1 note below still shares the plaintext by explicit user action).
@@ -493,7 +527,7 @@ https://gratefulday.space`;
       return;
     }
     if (blockSaveShare) return;
-    if (!gratitudeText.trim()) {
+    if (!hasContent) {
       toast({
         title: 'No reflection to share',
         description: 'Please write something before sharing.',
@@ -708,16 +742,36 @@ https://gratefulday.space`;
                   </p>
                 ) : (
                   <>
-                    <AutocompleteTextarea
-                      ref={editorRef}
-                      value={gratitudeText}
-                      onChange={setGratitudeText}
-                    />
+                    <div className="space-y-3">
+                      {notes.map((note, i) => (
+                        <div key={i} className="relative">
+                          {notes.length > 1 && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removeNote(i)}
+                              aria-label="Remove this moment"
+                              className="absolute top-1.5 right-1.5 z-10 h-6 w-6 text-muted-foreground hover:text-destructive"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                          <AutocompleteTextarea
+                            ref={(el) => {
+                              editorRefs.current[i] = el;
+                            }}
+                            value={note}
+                            onChange={(value) => updateNote(i, value)}
+                          />
+                        </div>
+                      ))}
+                    </div>
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
-                      onClick={() => editorRef.current?.appendNote()}
+                      onClick={addNote}
                       className="gap-1.5 h-8 text-muted-foreground -ml-1"
                     >
                       <Plus className="h-3.5 w-3.5" />
@@ -725,8 +779,8 @@ https://gratefulday.space`;
                     </Button>
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-xs text-muted-foreground">
-                        {noteCount > 1 && `${noteCount} moments · `}
-                        {gratitudeText.length} characters
+                        {filledNoteCount > 1 && `${filledNoteCount} moments · `}
+                        {joinedNotes.length} characters
                       </p>
                       {user && canEncrypt && (
                         <Button
@@ -799,7 +853,7 @@ https://gratefulday.space`;
                 </Button>
                 <Button
                   onClick={handleSave}
-                  disabled={isEncrypting || isPending || isPublishingNote || blockSaveShare || !gratitudeText.trim()}
+                  disabled={isEncrypting || isPending || isPublishingNote || blockSaveShare || !hasContent}
                   className="min-w-[100px] order-1 sm:order-2"
                 >
                   {isEncrypting || isPending ? (
@@ -816,7 +870,7 @@ https://gratefulday.space`;
                 </Button>
                 <Button
                   onClick={handleShareClick}
-                  disabled={isEncrypting || isPending || isPublishingNote || blockSaveShare || !gratitudeText.trim()}
+                  disabled={isEncrypting || isPending || isPublishingNote || blockSaveShare || !hasContent}
                   variant="default"
                   className="bg-amber-600 hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600 order-3"
                 >

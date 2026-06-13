@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { forwardRef, useImperativeHandle } from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import type { NostrEvent } from '@nostrify/nostrify';
 import type { DayInfo } from '@/lib/gratitudeUtils';
 import type { DecryptedEntry } from '@/hooks/useDecryptedEntry';
@@ -38,9 +38,9 @@ vi.mock('@/hooks/useToast', () => ({
 }));
 // Editor + login dialog are irrelevant to this guard and pull in providers.
 vi.mock('./AutocompleteTextarea', () => ({
-  AutocompleteTextarea: forwardRef<{ appendNote: () => void }, { value: string }>(
+  AutocompleteTextarea: forwardRef<{ focus: () => void }, { value: string }>(
     ({ value }, ref) => {
-      useImperativeHandle(ref, () => ({ appendNote: () => {} }));
+      useImperativeHandle(ref, () => ({ focus: () => {} }));
       return <textarea data-testid="editor" defaultValue={value} />;
     }
   ),
@@ -126,13 +126,106 @@ describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
 
     render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
 
-    // Editor is present (not locked) and the count reflects the two notes.
-    expect(await screen.findByText(/2 moments/i)).toBeInTheDocument();
+    // Two separate boxes, each its own editor, with the moment count + count.
+    const boxes = await screen.findAllByTestId('editor');
+    expect(boxes).toHaveLength(2);
+    expect(screen.getByText(/2 moments/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save/i })).not.toBeDisabled();
+    // Per-note remove controls appear once there is more than one box.
+    expect(
+      screen.getAllByRole('button', { name: /remove this moment/i })
+    ).toHaveLength(2);
     // The explicit affordance to add a note is discoverable.
     expect(
       screen.getByRole('button', { name: /add another moment/i })
     ).toBeInTheDocument();
+  });
+
+  it('seeds a one-note day as exactly one box, unchanged from a single entry', async () => {
+    const oneNote: NostrEvent = {
+      ...encryptedEntry,
+      id: 'evt-one',
+      content: 'just one moment',
+      tags: [
+        ['d', '2026-06-13'],
+        ['day', '164'],
+        ['published_at', '1700000000'],
+      ],
+    };
+    mockExistingEntry.mockReturnValue({ data: oneNote });
+    mockDecrypted.mockReturnValue({
+      content: 'just one moment',
+      isEncrypted: false,
+      isDecrypting: false,
+      decryptError: null,
+    });
+
+    render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
+
+    const boxes = await screen.findAllByTestId('editor');
+    expect(boxes).toHaveLength(1);
+    // No remove control and no multi-note count for a single note.
+    expect(
+      screen.queryByRole('button', { name: /remove this moment/i })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/moments ·/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save/i })).not.toBeDisabled();
+  });
+
+  it('"Add another moment" adds an empty box and reveals remove controls', async () => {
+    mockExistingEntry.mockReturnValue({ data: null });
+    mockDecrypted.mockReturnValue({
+      content: '',
+      isEncrypted: false,
+      isDecrypting: false,
+      decryptError: null,
+    });
+
+    render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
+
+    expect(await screen.findAllByTestId('editor')).toHaveLength(1);
+    expect(
+      screen.queryByRole('button', { name: /remove this moment/i })
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /add another moment/i }));
+
+    expect(await screen.findAllByTestId('editor')).toHaveLength(2);
+    expect(
+      screen.getAllByRole('button', { name: /remove this moment/i })
+    ).toHaveLength(2);
+  });
+
+  it('removing a box drops it and hides the remove control at one box', async () => {
+    const twoNotes: NostrEvent = {
+      ...encryptedEntry,
+      id: 'evt-two',
+      content: 'alpha\n\nbeta',
+      tags: [
+        ['d', '2026-06-13'],
+        ['day', '164'],
+        ['published_at', '1700000000'],
+      ],
+    };
+    mockExistingEntry.mockReturnValue({ data: twoNotes });
+    mockDecrypted.mockReturnValue({
+      content: 'alpha\n\nbeta',
+      isEncrypted: false,
+      isDecrypting: false,
+      decryptError: null,
+    });
+
+    render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
+
+    expect(await screen.findAllByTestId('editor')).toHaveLength(2);
+    fireEvent.click(
+      screen.getAllByRole('button', { name: /remove this moment/i })[0]
+    );
+
+    expect(await screen.findAllByTestId('editor')).toHaveLength(1);
+    expect(
+      screen.queryByRole('button', { name: /remove this moment/i })
+    ).not.toBeInTheDocument();
   });
 
   it('renders a past-day multi-note entry as separate read-only blocks', () => {

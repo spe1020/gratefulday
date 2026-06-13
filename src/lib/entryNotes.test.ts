@@ -74,12 +74,13 @@ describe('round-trip stability', () => {
     }
   });
 
-  it('drops an appended trailing separator (no empty trailing note)', () => {
-    // The "Add another moment" button appends "\n\n"; saving before typing the
-    // new note must not persist a phantom empty note.
-    expect(normalizeNotes('a moment\n\n')).toBe('a moment');
+  it('drops empty boxes so they never create phantom notes', () => {
+    // An "Add another moment" box left blank must not persist on save.
+    expect(joinNotes(['a moment', ''])).toBe('a moment');
+    expect(joinNotes(['first', '', 'second'])).toBe('first\n\nsecond');
+    expect(joinNotes(['', '   ', ''])).toBe('');
+    // Trailing blank lines within a single note's content normalize away too.
     expect(normalizeNotes('first\n\nsecond\n\n')).toBe('first\n\nsecond');
-    expect(splitNotes('first\n\nsecond\n\n')).toEqual(['first', 'second']);
   });
 
   it('normalizeNotes is idempotent', () => {
