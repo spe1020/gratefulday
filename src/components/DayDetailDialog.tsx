@@ -568,6 +568,11 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
           const dayEmojis = ["☀️", "🌿", "🌅", "🌞", "🌻", "⭐️"];
           const dayEmoji = dayEmojis[(day.dayOfYear - 1) % dayEmojis.length];
 
+          // Each note gets its own 🙏 prefix (not just the first).
+          const notesBlock = splitNotes(trimmedText)
+            .map((note) => `🙏 ${note}`)
+            .join('\n\n');
+
           // Format the content for the kind 1 note
           const noteContent = `Day ${day.dayOfYear} ${dayEmoji}
 
@@ -576,7 +581,7 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
 
 💫 "${affirmation}"
 
-🙏 ${trimmedText}
+${notesBlock}
 
 https://gratefulday.space`;
 
