@@ -124,7 +124,7 @@ describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('seeds the editor with an existing multi-note entry and shows the moment count', async () => {
+  it('opens an existing multi-note entry as published cards (one indicator, no boxes)', async () => {
     const plaintextMultiNote: NostrEvent = {
       ...encryptedEntry,
       id: 'evt-plain-multi',
@@ -145,22 +145,19 @@ describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
 
     render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
 
-    // Two separate boxes, each its own editor, with the moment count + count.
-    const boxes = await screen.findAllByTestId('editor');
-    expect(boxes).toHaveLength(2);
-    expect(screen.getByText(/2 moments/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /save/i })).not.toBeDisabled();
-    // Per-note remove controls appear once there is more than one box.
+    // Each saved note is a read-only published card with its own Edit control —
+    // no draft editor boxes on open.
+    expect(await screen.findByText('first moment')).toBeInTheDocument();
+    expect(screen.getByText('second moment')).toBeInTheDocument();
+    expect(screen.queryByTestId('editor')).not.toBeInTheDocument();
     expect(
-      screen.getAllByRole('button', { name: /remove this moment/i })
+      screen.getAllByRole('button', { name: /edit this moment/i })
     ).toHaveLength(2);
-    // The explicit affordance to add a note is discoverable.
-    expect(
-      screen.getByRole('button', { name: /add another moment/i })
-    ).toBeInTheDocument();
+    expect(screen.getByText(/2 moments/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save entry/i })).not.toBeDisabled();
   });
 
-  it('seeds a one-note day as exactly one box, unchanged from a single entry', async () => {
+  it('opens a one-note day as exactly one published card with no moment count', async () => {
     const oneNote: NostrEvent = {
       ...encryptedEntry,
       id: 'evt-one',
@@ -181,17 +178,85 @@ describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
 
     render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
 
-    const boxes = await screen.findAllByTestId('editor');
-    expect(boxes).toHaveLength(1);
-    // No remove control and no multi-note count for a single note.
+    expect(await screen.findByText('just one moment')).toBeInTheDocument();
+    expect(screen.queryByTestId('editor')).not.toBeInTheDocument();
     expect(
-      screen.queryByRole('button', { name: /remove this moment/i })
-    ).not.toBeInTheDocument();
+      screen.getAllByRole('button', { name: /edit this moment/i })
+    ).toHaveLength(1);
+    // No multi-note count for a single note.
     expect(screen.queryByText(/moments ·/i)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /save/i })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: /save entry/i })).not.toBeDisabled();
   });
 
-  it('"Add another moment" adds an empty box and reveals remove controls', async () => {
+  it('Edit turns a published card into a draft box seeded with its text', async () => {
+    const oneNote: NostrEvent = {
+      ...encryptedEntry,
+      id: 'evt-edit',
+      content: 'editable moment',
+      tags: [
+        ['d', '2026-06-13'],
+        ['day', '164'],
+        ['published_at', '1700000000'],
+      ],
+    };
+    mockExistingEntry.mockReturnValue({ data: oneNote });
+    mockDecrypted.mockReturnValue({
+      content: 'editable moment',
+      isEncrypted: false,
+      isDecrypting: false,
+      decryptError: null,
+    });
+
+    render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /edit this moment/i }));
+
+    // The card becomes a draft editor box holding the same text.
+    expect(screen.getByTestId('editor')).toHaveValue('editable moment');
+    // It's no longer a published card (no Edit control for it).
+    expect(
+      screen.queryByRole('button', { name: /edit this moment/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it('a successful Public save flips drafts back to published cards', async () => {
+    // Make the publish mock resolve so the optimistic flip runs.
+    publish.mockImplementation((_event, opts) =>
+      opts?.onSuccess?.({ id: 'evt-published-new' })
+    );
+    mockExistingEntry.mockReturnValue({ data: null });
+    mockDecrypted.mockReturnValue({
+      content: '',
+      isEncrypted: false,
+      isDecrypting: false,
+      decryptError: null,
+    });
+
+    render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
+
+    // New day → one draft box. Type into it, then save the whole entry.
+    fireEvent.change(await screen.findByTestId('editor'), {
+      target: { value: 'a brand new moment' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save entry/i }));
+
+    // The save handler awaits buildEntryEvent, so the optimistic flip settles a
+    // microtask after the click; let it flush before asserting.
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    expect(publish.mock.calls[0][0]).toMatchObject({
+      kind: 36669,
+      content: 'a brand new moment',
+    });
+
+    // After success the entry shows as a published card and the box is gone.
+    expect(await screen.findByText('a brand new moment')).toBeInTheDocument();
+    expect(screen.queryByTestId('editor')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /edit this moment/i })
+    ).toBeInTheDocument();
+  });
+
+  it('"Add another moment" adds an empty draft box and reveals remove controls', async () => {
     mockExistingEntry.mockReturnValue({ data: null });
     mockDecrypted.mockReturnValue({
       content: '',
@@ -215,20 +280,10 @@ describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
     ).toHaveLength(2);
   });
 
-  it('removing a box drops it and hides the remove control at one box', async () => {
-    const twoNotes: NostrEvent = {
-      ...encryptedEntry,
-      id: 'evt-two',
-      content: 'alpha\n\nbeta',
-      tags: [
-        ['d', '2026-06-13'],
-        ['day', '164'],
-        ['published_at', '1700000000'],
-      ],
-    };
-    mockExistingEntry.mockReturnValue({ data: twoNotes });
+  it('removing a draft box drops it and hides the remove control at one box', async () => {
+    mockExistingEntry.mockReturnValue({ data: null });
     mockDecrypted.mockReturnValue({
-      content: 'alpha\n\nbeta',
+      content: '',
       isEncrypted: false,
       isDecrypting: false,
       decryptError: null,
@@ -236,7 +291,10 @@ describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
 
     render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
 
+    // Build two draft boxes via Add, then remove one.
+    fireEvent.click(await screen.findByRole('button', { name: /add another moment/i }));
     expect(await screen.findAllByTestId('editor')).toHaveLength(2);
+
     fireEvent.click(
       screen.getAllByRole('button', { name: /remove this moment/i })[0]
     );
@@ -247,7 +305,7 @@ describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('renders a past-day multi-note entry as separate read-only blocks', () => {
+  it('renders a past-day multi-note entry as published cards with no Edit', () => {
     const pastDay: DayInfo = { ...TODAY, isToday: false, isPast: true };
     const plaintextMultiNote: NostrEvent = {
       ...encryptedEntry,
@@ -269,14 +327,17 @@ describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
 
     render(<DayDetailDialog day={pastDay} open onOpenChange={() => {}} />);
 
-    // Each note renders in its own element rather than one run-on paragraph.
+    // Each note renders in its own card rather than one run-on paragraph.
     const one = screen.getByText('grateful one');
     const two = screen.getByText('grateful two');
     expect(one).toBeInTheDocument();
     expect(two).toBeInTheDocument();
     expect(one).not.toBe(two);
-    // No editor in the read-only past view.
+    // No editor and no Edit affordance on a non-editable past day.
     expect(screen.queryByTestId('editor')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /edit this moment/i })
+    ).not.toBeInTheDocument();
   });
 
   it('shows a loading state and disables Save/Share while an existing entry is still decrypting', () => {
@@ -307,8 +368,8 @@ describe('DayDetailDialog — failed-save data safety', () => {
     },
   };
 
-  // A plaintext entry seeds the editor (no decryption needed); the user then
-  // switches the whole day to Private before saving.
+  // A plaintext entry seeds a published card; the user edits it into a draft,
+  // switches the whole day to Private, then saves.
   const plaintextEntry: NostrEvent = {
     ...encryptedEntry,
     id: 'evt-plain',
@@ -335,17 +396,18 @@ describe('DayDetailDialog — failed-save data safety', () => {
     });
   });
 
-  async function switchToPrivateThenClick(buttonName: RegExp) {
+  async function editSwitchPrivateThenClick(buttonName: RegExp) {
     render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
-    // Seeded note is present and editable.
-    expect(await screen.findByTestId('editor')).toHaveValue('my unsaved thoughts');
+    // Edit the seeded published card into a draft box (now an unsaved edit).
+    fireEvent.click(await screen.findByRole('button', { name: /edit this moment/i }));
+    expect(screen.getByTestId('editor')).toHaveValue('my unsaved thoughts');
     // Flip the whole-day control to Private (it seeds Public for a plaintext entry).
     fireEvent.click(screen.getByRole('button', { name: /visibility: public/i }));
     fireEvent.click(screen.getByRole('button', { name: buttonName }));
   }
 
   it('keeps the note and fires no event when a Private handleSave fails closed', async () => {
-    await switchToPrivateThenClick(/^save$/i);
+    await editSwitchPrivateThenClick(/save entry/i);
 
     // The encryption rejection surfaces as a reassuring, fail-closed toast.
     await waitFor(() =>
@@ -363,7 +425,7 @@ describe('DayDetailDialog — failed-save data safety', () => {
 
   it('keeps the note and fires NO kind 1 when a Private share fails closed', async () => {
     // Share of a Private entry routes through the confirm guard first.
-    await switchToPrivateThenClick(/share to nostr/i);
+    await editSwitchPrivateThenClick(/share to nostr/i);
     fireEvent.click(await screen.findByRole('button', { name: /share publicly/i }));
 
     await waitFor(() =>
