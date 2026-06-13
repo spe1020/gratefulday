@@ -97,6 +97,64 @@ describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
     expect(publishNote).not.toHaveBeenCalled();
   });
 
+  it('seeds the editor with an existing multi-note entry and shows the moment count', async () => {
+    const plaintextMultiNote: NostrEvent = {
+      ...encryptedEntry,
+      id: 'evt-plain-multi',
+      content: 'first moment\n\nsecond moment',
+      tags: [
+        ['d', '2026-06-13'],
+        ['day', '164'],
+        ['published_at', '1700000000'],
+      ],
+    };
+    mockExistingEntry.mockReturnValue({ data: plaintextMultiNote });
+    mockDecrypted.mockReturnValue({
+      content: 'first moment\n\nsecond moment',
+      isEncrypted: false,
+      isDecrypting: false,
+      decryptError: null,
+    });
+
+    render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
+
+    // Editor is present (not locked) and the count reflects the two notes.
+    expect(await screen.findByText(/2 moments/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /save/i })).not.toBeDisabled();
+  });
+
+  it('renders a past-day multi-note entry as separate read-only blocks', () => {
+    const pastDay: DayInfo = { ...TODAY, isToday: false, isPast: true };
+    const plaintextMultiNote: NostrEvent = {
+      ...encryptedEntry,
+      id: 'evt-past-multi',
+      content: 'grateful one\n\ngrateful two',
+      tags: [
+        ['d', '2026-06-13'],
+        ['day', '164'],
+        ['published_at', '1700000000'],
+      ],
+    };
+    mockExistingEntry.mockReturnValue({ data: plaintextMultiNote });
+    mockDecrypted.mockReturnValue({
+      content: 'grateful one\n\ngrateful two',
+      isEncrypted: false,
+      isDecrypting: false,
+      decryptError: null,
+    });
+
+    render(<DayDetailDialog day={pastDay} open onOpenChange={() => {}} />);
+
+    // Each note renders in its own element rather than one run-on paragraph.
+    const one = screen.getByText('grateful one');
+    const two = screen.getByText('grateful two');
+    expect(one).toBeInTheDocument();
+    expect(two).toBeInTheDocument();
+    expect(one).not.toBe(two);
+    // No editor in the read-only past view.
+    expect(screen.queryByTestId('editor')).not.toBeInTheDocument();
+  });
+
   it('shows a loading state and disables Save/Share while an existing entry is still decrypting', () => {
     mockExistingEntry.mockReturnValue({ data: encryptedEntry });
     mockDecrypted.mockReturnValue({

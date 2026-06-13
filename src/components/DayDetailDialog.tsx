@@ -36,6 +36,7 @@ import {
   isEncryptedEntry,
 } from '@/lib/privacyUtils';
 import type { NostrSigner } from '@nostrify/nostrify';
+import { normalizeNotes, splitNotes } from '@/lib/entryNotes';
 import { useToast } from '@/hooks/useToast';
 import LoginDialog from './auth/LoginDialog';
 import { nip19 } from 'nostr-tools';
@@ -255,6 +256,10 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   const entryLocked = hasExistingEntry && !!decryptError;
   const blockSaveShare = entrySeeding || entryLocked;
 
+  // A day can hold multiple notes inside the one entry; blank lines delimit them.
+  const noteCount = splitNotes(gratitudeText).length;
+  const readOnlyNotes = splitNotes(entryContent);
+
   /**
    * Build the 36669 event for the current editor state. For private entries
    * the content is NIP-44 ciphertext encrypted to the user's own pubkey, the
@@ -269,7 +274,9 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   }> => {
     if (!user || !day) throw new Error('Not ready');
 
-    const trimmedText = gratitudeText.trim();
+    // All of the day's notes live inside the single 36669, blank-line
+    // delimited — one event per day stays the architecture.
+    const trimmedText = normalizeNotes(gratitudeText);
     const timestamp = Math.floor(day.date.getTime() / 1000);
     const baseTags = [
       ['d', day.dateString],
@@ -392,7 +399,9 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
       return;
     }
 
-    const trimmedText = gratitudeText.trim();
+    // Share posts all of the day's notes (blank-line separated) — NoteContent
+    // renders them as paragraphs in the feed and other clients.
+    const trimmedText = normalizeNotes(gratitudeText);
 
     // First, save as kind 36669 (encrypted when Private is selected — the
     // kind 1 note below still shares the plaintext by explicit user action).
@@ -636,6 +645,17 @@ https://gratefulday.space`;
                               🔒 Encrypted entry — your current signer can't
                               decrypt it.
                             </p>
+                          ) : readOnlyNotes.length > 1 ? (
+                            <div className="space-y-3">
+                              {readOnlyNotes.map((note, i) => (
+                                <p
+                                  key={i}
+                                  className="text-base text-foreground whitespace-pre-wrap break-words border-l-2 border-border/60 pl-3"
+                                >
+                                  {note}
+                                </p>
+                              ))}
+                            </div>
                           ) : (
                             <p className="text-base text-foreground whitespace-pre-wrap break-words">
                               {entryContent}
@@ -659,10 +679,11 @@ https://gratefulday.space`;
               <div className="space-y-3">
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-foreground block">
-                    Write a moment of gratitude from today.
+                    Write your moments of gratitude from today.
                   </label>
                   <p className="text-sm text-muted-foreground">
-                    It can be a person, a moment, or something simple.
+                    A person, a moment, or something simple. Leave a blank line
+                    to add another.
                   </p>
                   {!user && (
                     <p className="text-xs text-muted-foreground">
@@ -692,6 +713,7 @@ https://gratefulday.space`;
                     />
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-xs text-muted-foreground">
+                        {noteCount > 1 && `${noteCount} moments · `}
                         {gratitudeText.length} characters
                       </p>
                       {user && canEncrypt && (
