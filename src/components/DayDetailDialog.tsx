@@ -397,6 +397,9 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   // editor, and for a Private save its ciphertext would trigger a re-decrypt.
   // dedupeEntriesByDTag enforces the same latest-created_at-wins invariant the
   // hooks use, so a stale same-day duplicate can never win.
+  // NOTE: this list cache is a presence/metadata source and MAY hold ciphertext
+  // (Private entries) — consumers must read content via useDecryptedEntry,
+  // never event.content directly.
   const cacheSavedEntry = (event: NostrEvent) => {
     if (!user) return;
     queryClient.setQueryData<NostrEvent[]>(

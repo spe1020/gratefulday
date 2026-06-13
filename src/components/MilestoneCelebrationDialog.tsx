@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Flame, Send } from 'lucide-react';
+import { Flame, Send, Sprout } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -19,6 +19,11 @@ import {
 } from '@/lib/milestoneStore';
 
 const MILESTONE_COPY: Record<number, { title: string; message: string }> = {
+  1: {
+    title: 'You planted the seed',
+    message:
+      'Your first reflection is in. This is the foundation — every gratitude practice begins with a single day. Come back tomorrow and watch it grow.',
+  },
   7: {
     title: 'One full week!',
     message:
@@ -91,13 +96,19 @@ export function MilestoneCelebrationDialog() {
   }, [pubkey, isLoading, total, current]);
 
   const copy = milestone !== null ? MILESTONE_COPY[milestone] : null;
+  // Day 1 is a "foundation" celebration, not a streak trophy — distinct icon,
+  // copy, and share framing.
+  const isFoundation = milestone === 1;
 
   const handleShare = () => {
     if (milestone === null) return;
+    const content = isFoundation
+      ? `I started my gratitude practice today 🌱\n\nhttps://gratefulday.space`
+      : `Day streak milestone: ${milestone} days of gratitude 🔥\n\nhttps://gratefulday.space`;
     publish(
       {
         kind: 1,
-        content: `Day streak milestone: ${milestone} days of gratitude 🔥\n\nhttps://gratefulday.space`,
+        content,
         tags: [['t', 'gratefulday']],
       },
       {
@@ -150,10 +161,22 @@ export function MilestoneCelebrationDialog() {
 
             <div className="relative z-10">
               <DialogHeader className="items-center text-center space-y-3 pt-4">
-                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-amber-100 to-orange-100 dark:from-amber-900/40 dark:to-orange-900/40 border-2 border-amber-300 dark:border-amber-700">
-                  <Flame className="h-8 w-8 text-orange-500 dark:text-orange-400 fill-orange-400/40 dark:fill-orange-500/30" />
-                </div>
-                <DialogTitle className="text-2xl text-amber-700 dark:text-amber-300">
+                {isFoundation ? (
+                  <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-emerald-100 to-green-100 dark:from-emerald-900/40 dark:to-green-900/40 border-2 border-emerald-300 dark:border-emerald-700">
+                    <Sprout className="h-8 w-8 text-emerald-600 dark:text-emerald-400" />
+                  </div>
+                ) : (
+                  <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-amber-100 to-orange-100 dark:from-amber-900/40 dark:to-orange-900/40 border-2 border-amber-300 dark:border-amber-700">
+                    <Flame className="h-8 w-8 text-orange-500 dark:text-orange-400 fill-orange-400/40 dark:fill-orange-500/30" />
+                  </div>
+                )}
+                <DialogTitle
+                  className={
+                    isFoundation
+                      ? 'text-2xl text-emerald-700 dark:text-emerald-300'
+                      : 'text-2xl text-amber-700 dark:text-amber-300'
+                  }
+                >
                   {copy.title}
                 </DialogTitle>
                 <DialogDescription className="text-base text-foreground/80">
@@ -161,9 +184,15 @@ export function MilestoneCelebrationDialog() {
                 </DialogDescription>
               </DialogHeader>
 
-              <p className="text-center text-sm font-semibold text-amber-600 dark:text-amber-400 mt-4">
-                🔥 {milestone} day streak
-              </p>
+              {isFoundation ? (
+                <p className="text-center text-sm font-semibold text-emerald-600 dark:text-emerald-400 mt-4">
+                  🌱 Day one of your practice
+                </p>
+              ) : (
+                <p className="text-center text-sm font-semibold text-amber-600 dark:text-amber-400 mt-4">
+                  🔥 {milestone} day streak
+                </p>
+              )}
 
               <div className="flex flex-col gap-2 mt-6">
                 <Button

@@ -181,23 +181,25 @@ describe('calculateStreaks', () => {
 });
 
 describe('milestones', () => {
-  it('defines the expected milestone ladder', () => {
-    expect(MILESTONES).toEqual([7, 14, 30, 50, 100, 200, 365]);
+  it('defines the expected milestone ladder (day-1 foundation first)', () => {
+    expect(MILESTONES).toEqual([1, 7, 14, 30, 50, 100, 200, 365]);
   });
 
-  it('getReachedMilestones returns nothing below the first milestone', () => {
+  it('getReachedMilestones returns nothing below the first entry, then the day-1 tier', () => {
     expect(getReachedMilestones(0)).toEqual([]);
-    expect(getReachedMilestones(6)).toEqual([]);
+    expect(getReachedMilestones(1)).toEqual([1]);
+    expect(getReachedMilestones(6)).toEqual([1]);
   });
 
   it('getReachedMilestones includes a milestone exactly at the boundary', () => {
-    expect(getReachedMilestones(7)).toEqual([7]);
-    expect(getReachedMilestones(30)).toEqual([7, 14, 30]);
-    expect(getReachedMilestones(365)).toEqual([7, 14, 30, 50, 100, 200, 365]);
+    expect(getReachedMilestones(7)).toEqual([1, 7]);
+    expect(getReachedMilestones(30)).toEqual([1, 7, 14, 30]);
+    expect(getReachedMilestones(365)).toEqual([1, 7, 14, 30, 50, 100, 200, 365]);
   });
 
   it('getNextMilestone returns the milestone ahead, or null past 365', () => {
-    expect(getNextMilestone(0)).toBe(7);
+    expect(getNextMilestone(0)).toBe(1);
+    expect(getNextMilestone(1)).toBe(7);
     expect(getNextMilestone(6)).toBe(7);
     expect(getNextMilestone(7)).toBe(14);
     expect(getNextMilestone(200)).toBe(365);
