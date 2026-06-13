@@ -18,9 +18,13 @@ const BLANK_LINE = /\n[ \t]*(?:\n[ \t]*)+/;
 /**
  * Split entry content into individual notes: trimmed, non-empty, in order.
  * Empty or whitespace-only content yields `[]`.
+ *
+ * Newlines are normalized to `\n` first so content authored by another client
+ * with CRLF (`\r\n`) or lone CR line endings still splits on blank lines.
  */
 export function splitNotes(content: string): string[] {
   return content
+    .replace(/\r\n?/g, '\n')
     .split(BLANK_LINE)
     .map((note) => note.trim())
     .filter((note) => note.length > 0);

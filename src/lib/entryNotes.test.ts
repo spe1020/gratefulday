@@ -32,6 +32,15 @@ describe('splitNotes', () => {
     expect(splitNotes('a\n \t \nb')).toEqual(['a', 'b']);
   });
 
+  it('splits on CRLF and lone-CR blank lines from other clients', () => {
+    expect(splitNotes('first\r\n\r\nsecond')).toEqual(['first', 'second']);
+    expect(splitNotes('one\r\ntwo\r\n\r\nthree')).toEqual([
+      'one\ntwo',
+      'three',
+    ]);
+    expect(splitNotes('a\r\rb')).toEqual(['a', 'b']);
+  });
+
   it('returns [] for empty or whitespace-only content', () => {
     expect(splitNotes('')).toEqual([]);
     expect(splitNotes('   \n\n   ')).toEqual([]);
