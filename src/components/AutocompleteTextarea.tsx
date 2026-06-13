@@ -1,5 +1,5 @@
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useImperativeHandle, forwardRef } from 'react';
 import ReactDOMServer from 'react-dom/server';
 import { useProfileSearchService } from '@/lib/profileSearchService';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -15,7 +15,16 @@ type AutocompleteTextareaProps = {
   onChange: (value: string) => void;
 };
 
-export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaProps) => {
+/** Imperative actions exposed to parents (e.g. the "Add another moment" button). */
+export interface AutocompleteTextareaHandle {
+  /** Append a blank-line note separator and place the caret below it. */
+  appendNote: () => void;
+}
+
+export const AutocompleteTextarea = forwardRef<
+  AutocompleteTextareaHandle,
+  AutocompleteTextareaProps
+>(({ value, onChange }, ref) => {
   const [suggestions, setSuggestions] = useState<Profile[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -597,6 +606,42 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
 
 
+  // Append a blank-line separator so the next note starts a fresh paragraph,
+  // then drop the caret below it. Mirrors pressing Enter twice, but made
+  // discoverable via the parent's "Add another moment" button. A leading
+  // separator on an empty editor is skipped (it would only be trimmed away).
+  const appendNote = () => {
+    const el = contentEditableRef.current;
+    if (!el) return;
+    el.focus();
+    const selection = window.getSelection();
+    if (!selection) return;
+
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false); // caret to end of existing content
+
+    if ((el.textContent ?? '').trim().length > 0) {
+      const separator = document.createTextNode('\n\n');
+      range.insertNode(separator);
+      range.setStartAfter(separator);
+      range.collapse(true);
+    }
+
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    // Sync parent state from the DOM. htmlToPlainText trims the trailing
+    // separator, and normalizeNotes on save drops any empty trailing note, so
+    // clicking with nothing typed yet can't create a phantom note.
+    handleInput({ currentTarget: el } as React.FormEvent<HTMLDivElement>);
+  };
+
+  // appendNote only reads live refs (contentEditableRef) and stable callbacks,
+  // so a fresh closure each render isn't needed.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useImperativeHandle(ref, () => ({ appendNote }), []);
+
   return (
 
     <div className="relative space-y-2">
@@ -612,7 +657,7 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
               onBeforeInput={handleBeforeInput}
 
               contentEditable={true}
-              className="relative font-mono text-sm p-2 border rounded-md min-h-[80px]"
+              className="relative font-mono text-sm p-2 border rounded-md min-h-[80px] whitespace-pre-wrap break-words"
               data-placeholder="Share what you're grateful for..."
             />
 
@@ -696,4 +741,6 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
   );
 
-};
+});
+
+AutocompleteTextarea.displayName = 'AutocompleteTextarea';

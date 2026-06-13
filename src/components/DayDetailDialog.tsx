@@ -1,4 +1,4 @@
-import { AutocompleteTextarea } from './AutocompleteTextarea';
+import { AutocompleteTextarea, type AutocompleteTextareaHandle } from './AutocompleteTextarea';
 import { useState, useEffect, useRef } from 'react';
 import {
   Dialog,
@@ -19,7 +19,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import { Globe, Loader2, Lock, Save, Sparkles, Share2, Trash2 } from 'lucide-react';
+import { Globe, Loader2, Lock, Plus, Save, Sparkles, Share2, Trash2 } from 'lucide-react';
 import type { DayInfo } from '@/lib/gratitudeUtils';
 import { getQuoteForDay, getAffirmationForDay, formatDisplayDate } from '@/lib/gratitudeUtils';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
@@ -145,6 +145,7 @@ function extractMentionedPubkeys(text: string): string[] {
 
 export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProps) {
   const [gratitudeText, setGratitudeText] = useState('');
+  const editorRef = useRef<AutocompleteTextareaHandle>(null);
   const [showLoginDialog, setShowLoginDialog] = useState(false);
   const [isPrivate, setIsPrivate] = useState(false);
   const [isEncrypting, setIsEncrypting] = useState(false);
@@ -708,9 +709,20 @@ https://gratefulday.space`;
                 ) : (
                   <>
                     <AutocompleteTextarea
+                      ref={editorRef}
                       value={gratitudeText}
                       onChange={setGratitudeText}
                     />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => editorRef.current?.appendNote()}
+                      className="gap-1.5 h-8 text-muted-foreground -ml-1"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add another moment
+                    </Button>
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-xs text-muted-foreground">
                         {noteCount > 1 && `${noteCount} moments · `}

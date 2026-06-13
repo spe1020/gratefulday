@@ -74,6 +74,14 @@ describe('round-trip stability', () => {
     }
   });
 
+  it('drops an appended trailing separator (no empty trailing note)', () => {
+    // The "Add another moment" button appends "\n\n"; saving before typing the
+    // new note must not persist a phantom empty note.
+    expect(normalizeNotes('a moment\n\n')).toBe('a moment');
+    expect(normalizeNotes('first\n\nsecond\n\n')).toBe('first\n\nsecond');
+    expect(splitNotes('first\n\nsecond\n\n')).toEqual(['first', 'second']);
+  });
+
   it('normalizeNotes is idempotent', () => {
     for (const input of cases) {
       const once = normalizeNotes(input);

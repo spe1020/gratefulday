@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { forwardRef, useImperativeHandle } from 'react';
 import { render, screen } from '@testing-library/react';
 import type { NostrEvent } from '@nostrify/nostrify';
 import type { DayInfo } from '@/lib/gratitudeUtils';
@@ -37,8 +38,11 @@ vi.mock('@/hooks/useToast', () => ({
 }));
 // Editor + login dialog are irrelevant to this guard and pull in providers.
 vi.mock('./AutocompleteTextarea', () => ({
-  AutocompleteTextarea: ({ value }: { value: string }) => (
-    <textarea data-testid="editor" defaultValue={value} />
+  AutocompleteTextarea: forwardRef<{ appendNote: () => void }, { value: string }>(
+    ({ value }, ref) => {
+      useImperativeHandle(ref, () => ({ appendNote: () => {} }));
+      return <textarea data-testid="editor" defaultValue={value} />;
+    }
   ),
 }));
 vi.mock('./auth/LoginDialog', () => ({ default: () => null }));
@@ -95,6 +99,10 @@ describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
     expect(screen.getByRole('button', { name: /share to nostr/i })).toBeDisabled();
     expect(createEvent).not.toHaveBeenCalled();
     expect(publishNote).not.toHaveBeenCalled();
+    // No editor affordances when locked — nothing to add a note to.
+    expect(
+      screen.queryByRole('button', { name: /add another moment/i })
+    ).not.toBeInTheDocument();
   });
 
   it('seeds the editor with an existing multi-note entry and shows the moment count', async () => {
@@ -121,6 +129,10 @@ describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
     // Editor is present (not locked) and the count reflects the two notes.
     expect(await screen.findByText(/2 moments/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save/i })).not.toBeDisabled();
+    // The explicit affordance to add a note is discoverable.
+    expect(
+      screen.getByRole('button', { name: /add another moment/i })
+    ).toBeInTheDocument();
   });
 
   it('renders a past-day multi-note entry as separate read-only blocks', () => {
