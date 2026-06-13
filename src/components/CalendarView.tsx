@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { TodayHero } from './TodayHero';
 import { StreakBadge } from './StreakBadge';
+import { GratitudeHeatmap } from './GratitudeHeatmap';
 import { TodayTeachingCard } from './TodayTeachingCard';
 import { PastDaysList } from './PastDaysList';
 import { DayDetailDialog } from './DayDetailDialog';
@@ -53,6 +54,9 @@ export function CalendarView({ days, entriesByDate }: CalendarViewProps) {
 
         {/* Streak strip - hidden when logged out or no entries yet */}
         <StreakBadge />
+
+        {/* Contribution heatmap - same self-hide as the streak strip */}
+        <GratitudeHeatmap />
 
         {/* Today's Teaching - Open by default when page loads */}
         <TodayTeachingCard dayOfYear={today.dayOfYear} defaultOpen={true} />
