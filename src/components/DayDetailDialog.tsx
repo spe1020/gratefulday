@@ -1,5 +1,5 @@
 import { AutocompleteTextarea } from './AutocompleteTextarea';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -168,12 +168,47 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     decryptError,
   } = useDecryptedEntry(existingEntry);
 
-  // Always start with a fresh empty text box when dialog opens or day changes
+  // Seed the editor from the existing entry exactly once per open-session for a
+  // given entry id. We never re-seed after the user has started typing (the
+  // latch blocks re-fires when, e.g., a background refetch toggles isDecrypting),
+  // and we never seed plaintext over an entry we couldn't decrypt: a decrypt
+  // failure leaves the editor empty AND save/share disabled, so a blank box can
+  // never silently overwrite content the user can't currently read.
+  const seededKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (open) {
-      setGratitudeText('');
+    if (!open) {
+      seededKeyRef.current = null;
+      return;
     }
-  }, [day, open]);
+
+    const key = `${day?.dateString ?? ''}:${existingEntry?.id ?? 'none'}`;
+    if (seededKeyRef.current === key) return;
+
+    if (!existingEntry) {
+      // No saved entry: fresh empty editor (seeded once).
+      setGratitudeText('');
+      seededKeyRef.current = key;
+      return;
+    }
+
+    // Wait for decryption to settle before seeding — don't latch yet.
+    if (isDecrypting) return;
+
+    if (decryptError) {
+      // Fail-closed: couldn't read it, so don't seed plaintext. Latch to stop
+      // re-firing; the locked UI + disabled save/share guard the rest.
+      setGratitudeText('');
+      seededKeyRef.current = key;
+      return;
+    }
+
+    // Successful decrypt or plaintext passthrough.
+    setGratitudeText(entryContent);
+    seededKeyRef.current = key;
+    // Keyed on existingEntry?.id, not the object: a background refetch that
+    // returns an identity-changed-but-same entry must not re-fire seeding.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, day?.dateString, existingEntry?.id, isDecrypting, decryptError, entryContent]);
 
   // Toggle is shown when the signer supports NIP-44 — or optimistically for
   // bunkers ('unknown'), where support is only discoverable by attempting.
@@ -211,6 +246,14 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   const quote = getQuoteForDay(day.dayOfYear);
   const affirmation = getAffirmationForDay(day.dayOfYear);
   const isPastDay = day.isPast;
+
+  // Editing an existing entry: the editor mustn't accept a save until the entry
+  // has been decrypted and seeded. While decrypting we show a loading state;
+  // when decryption failed we lock the editor entirely (no blank-overwrite path).
+  const hasExistingEntry = !!existingEntry;
+  const entrySeeding = hasExistingEntry && isDecrypting;
+  const entryLocked = hasExistingEntry && !!decryptError;
+  const blockSaveShare = entrySeeding || entryLocked;
 
   /**
    * Build the 36669 event for the current editor state. For private entries
@@ -283,6 +326,10 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
       return;
     }
 
+    // Never save while an existing entry is still decrypting or failed to
+    // decrypt — an empty/partial editor could overwrite content not yet seen.
+    if (blockSaveShare) return;
+
     if (!gratitudeText.trim()) {
       toast({
         title: 'Empty entry',
@@ -315,7 +362,8 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
             ? 'Encrypted so only you can read it.'
             : 'Your reflection has been saved.',
         });
-        setGratitudeText(''); // Reset text box for a fresh entry
+        // Keep the saved text in the editor; the seed effect re-syncs from the
+        // refetched entry. (No reset — this is edit-in-place, not a fresh box.)
       },
       onError: (error) => {
         toast({
@@ -332,6 +380,8 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
       setShowLoginDialog(true);
       return;
     }
+
+    if (blockSaveShare) return;
 
     if (!gratitudeText.trim()) {
       toast({
@@ -405,7 +455,6 @@ https://gratefulday.space`;
                   title: 'Shared to Nostr! 🌟',
                   description: 'Your reflection has been saved and posted to gratefulday.space.',
                 });
-                setGratitudeText(''); // Reset text box for a fresh entry
               },
               onError: (error) => {
                 toast({
@@ -413,7 +462,6 @@ https://gratefulday.space`;
                   description: error.message || 'Your reflection was saved but could not be posted.',
                   variant: 'destructive',
                 });
-                setGratitudeText(''); // Reset text box even if share failed
               },
             }
           );
@@ -434,6 +482,7 @@ https://gratefulday.space`;
       setShowLoginDialog(true);
       return;
     }
+    if (blockSaveShare) return;
     if (!gratitudeText.trim()) {
       toast({
         title: 'No reflection to share',
@@ -621,49 +670,67 @@ https://gratefulday.space`;
                     </p>
                   )}
                 </div>
-                <AutocompleteTextarea
-                  value={gratitudeText}
-                  onChange={setGratitudeText}
-                />
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-xs text-muted-foreground">
-                    {gratitudeText.length} characters
+                {entrySeeding ? (
+                  /* Existing entry still decrypting — don't seed or allow save yet. */
+                  <p className="flex items-center gap-2 text-sm text-muted-foreground p-3 border rounded-md min-h-[80px]">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading your entry…
                   </p>
-                  {user && canEncrypt && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setIsPrivate((p) => !p)}
-                      aria-pressed={isPrivate}
-                      className="gap-1.5 h-8"
-                    >
-                      {isPrivate ? (
-                        <>
-                          <Lock className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-                          Private
-                        </>
-                      ) : (
-                        <>
-                          <Globe className="h-3.5 w-3.5" />
-                          Public
-                        </>
+                ) : entryLocked ? (
+                  /* Couldn't decrypt — lock editing so a blank box can't overwrite it. */
+                  <p className="text-sm text-muted-foreground italic p-3 border rounded-md bg-muted/50">
+                    🔒 This entry is encrypted and your current signer can't
+                    decrypt it. Editing is disabled so you don't overwrite
+                    content you can't see — switch to a signer that supports
+                    NIP-44 to edit it.
+                  </p>
+                ) : (
+                  <>
+                    <AutocompleteTextarea
+                      value={gratitudeText}
+                      onChange={setGratitudeText}
+                    />
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs text-muted-foreground">
+                        {gratitudeText.length} characters
+                      </p>
+                      {user && canEncrypt && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setIsPrivate((p) => !p)}
+                          aria-pressed={isPrivate}
+                          className="gap-1.5 h-8"
+                        >
+                          {isPrivate ? (
+                            <>
+                              <Lock className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                              Private
+                            </>
+                          ) : (
+                            <>
+                              <Globe className="h-3.5 w-3.5" />
+                              Public
+                            </>
+                          )}
+                        </Button>
                       )}
-                    </Button>
-                  )}
-                </div>
-                {user && canEncrypt && (
-                  <p className="text-xs text-muted-foreground text-right">
-                    {isPrivate
-                      ? 'Encrypted so only you can read it. The date stays visible.'
-                      : 'Saved as a public note on your relays.'}
-                  </p>
-                )}
-                {showNip44Hint && (
-                  <p className="text-xs text-muted-foreground">
-                    Your signer doesn't support encryption (NIP-44). Entries
-                    will be saved publicly.
-                  </p>
+                    </div>
+                    {user && canEncrypt && (
+                      <p className="text-xs text-muted-foreground text-right">
+                        {isPrivate
+                          ? 'Encrypted so only you can read it. The date stays visible.'
+                          : 'Saved as a public note on your relays.'}
+                      </p>
+                    )}
+                    {showNip44Hint && (
+                      <p className="text-xs text-muted-foreground">
+                        Your signer doesn't support encryption (NIP-44). Entries
+                        will be saved publicly.
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -698,7 +765,7 @@ https://gratefulday.space`;
                 </Button>
                 <Button
                   onClick={handleSave}
-                  disabled={isEncrypting || isPending || isPublishingNote || !gratitudeText.trim()}
+                  disabled={isEncrypting || isPending || isPublishingNote || blockSaveShare || !gratitudeText.trim()}
                   className="min-w-[100px] order-1 sm:order-2"
                 >
                   {isEncrypting || isPending ? (
@@ -715,7 +782,7 @@ https://gratefulday.space`;
                 </Button>
                 <Button
                   onClick={handleShareClick}
-                  disabled={isEncrypting || isPending || isPublishingNote || !gratitudeText.trim()}
+                  disabled={isEncrypting || isPending || isPublishingNote || blockSaveShare || !gratitudeText.trim()}
                   variant="default"
                   className="bg-amber-600 hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600 order-3"
                 >
