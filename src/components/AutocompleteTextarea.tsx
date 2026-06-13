@@ -1,5 +1,5 @@
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useImperativeHandle, forwardRef } from 'react';
 import ReactDOMServer from 'react-dom/server';
 import { useProfileSearchService } from '@/lib/profileSearchService';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -15,7 +15,16 @@ type AutocompleteTextareaProps = {
   onChange: (value: string) => void;
 };
 
-export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaProps) => {
+/** Imperative actions exposed to parents (e.g. focusing a newly added note box). */
+export interface AutocompleteTextareaHandle {
+  /** Focus this editor and place the caret at the end of its content. */
+  focus: () => void;
+}
+
+export const AutocompleteTextarea = forwardRef<
+  AutocompleteTextareaHandle,
+  AutocompleteTextareaProps
+>(({ value, onChange }, ref) => {
   const [suggestions, setSuggestions] = useState<Profile[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -597,6 +606,24 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
 
 
+  // Focus this editor and drop the caret at the end of its content, so a
+  // newly added note box receives the cursor.
+  const focus = () => {
+    const el = contentEditableRef.current;
+    if (!el) return;
+    el.focus();
+    const selection = window.getSelection();
+    if (!selection) return;
+
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false); // caret to end of existing content
+    selection.removeAllRanges();
+    selection.addRange(range);
+  };
+
+  useImperativeHandle(ref, () => ({ focus }), []);
+
   return (
 
     <div className="relative space-y-2">
@@ -612,7 +639,7 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
               onBeforeInput={handleBeforeInput}
 
               contentEditable={true}
-              className="relative font-mono text-sm p-2 border rounded-md min-h-[80px]"
+              className="relative font-mono text-sm p-2 border rounded-md min-h-[80px] whitespace-pre-wrap break-words"
               data-placeholder="Share what you're grateful for..."
             />
 
@@ -696,4 +723,6 @@ export const AutocompleteTextarea = ({ value, onChange }: AutocompleteTextareaPr
 
   );
 
-};
+});
+
+AutocompleteTextarea.displayName = 'AutocompleteTextarea';

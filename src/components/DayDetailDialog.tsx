@@ -1,5 +1,5 @@
-import { AutocompleteTextarea } from './AutocompleteTextarea';
-import { useState, useEffect } from 'react';
+import { AutocompleteTextarea, type AutocompleteTextareaHandle } from './AutocompleteTextarea';
+import { useState, useEffect, useRef } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -19,7 +19,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import { Globe, Loader2, Lock, Save, Sparkles, Share2, Trash2 } from 'lucide-react';
+import { Globe, Loader2, Lock, Pencil, Plus, Save, Sparkles, Share2, Trash2, X } from 'lucide-react';
 import type { DayInfo } from '@/lib/gratitudeUtils';
 import { getQuoteForDay, getAffirmationForDay, formatDisplayDate } from '@/lib/gratitudeUtils';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
@@ -36,6 +36,7 @@ import {
   isEncryptedEntry,
 } from '@/lib/privacyUtils';
 import type { NostrSigner } from '@nostrify/nostrify';
+import { joinNotes, splitNotes } from '@/lib/entryNotes';
 import { useToast } from '@/hooks/useToast';
 import LoginDialog from './auth/LoginDialog';
 import { nip19 } from 'nostr-tools';
@@ -44,6 +45,49 @@ interface DayDetailDialogProps {
   day: DayInfo | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+}
+
+/**
+ * One note in the editor. `published` means "matches the version currently
+ * stored on relays"; `draft` means "unsaved edits." The whole day is one
+ * replaceable event, so Save republishes every note as a single entry — status
+ * is a display concern, never per-note publishing. The stable `id` keys the
+ * list so add/remove/edit don't shuffle DOM (and editor focus) by index.
+ */
+type NoteStatus = 'published' | 'draft';
+interface NoteState {
+  id: number;
+  text: string;
+  status: NoteStatus;
+}
+
+/** A saved note rendered read-only as a committed card; `onEdit` flips it to a draft. */
+function PublishedNoteCard({
+  text,
+  onEdit,
+}: {
+  text: string;
+  onEdit?: () => void;
+}) {
+  return (
+    <div className="relative rounded-lg border border-border/60 bg-muted/40 p-3">
+      <p className="text-base text-foreground whitespace-pre-wrap break-words pr-8">
+        {text}
+      </p>
+      {onEdit && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={onEdit}
+          aria-label="Edit this moment"
+          className="absolute top-1.5 right-1.5 h-7 w-7 text-muted-foreground hover:text-foreground"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </Button>
+      )}
+    </div>
+  );
 }
 
 /** Last-used privacy choice per pubkey; seeds the toggle for new entries. */
@@ -143,7 +187,25 @@ function extractMentionedPubkeys(text: string): string[] {
 }
 
 export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProps) {
-  const [gratitudeText, setGratitudeText] = useState('');
+  // Each note is its own item (published card or draft box); the day still
+  // saves as one 36669. Stable ids key the list and target focus.
+  const [notes, setNotes] = useState<NoteState[]>([
+    { id: 0, text: '', status: 'draft' },
+  ]);
+  const nextIdRef = useRef(1);
+  const makeNote = (text: string, status: NoteStatus): NoteState => ({
+    id: nextIdRef.current++,
+    text,
+    status,
+  });
+  // Draft editor handles by note id (a Map, not an array, so removing a note
+  // never reassigns another note's ref).
+  const editorRefs = useRef<Map<number, AutocompleteTextareaHandle | null>>(
+    new Map()
+  );
+  // Id of a note to focus once its draft box mounts — set by Add and Edit so
+  // seeding N cards on open never steals focus.
+  const pendingFocusIdRef = useRef<number | null>(null);
   const [showLoginDialog, setShowLoginDialog] = useState(false);
   const [isPrivate, setIsPrivate] = useState(false);
   const [isEncrypting, setIsEncrypting] = useState(false);
@@ -168,12 +230,66 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     decryptError,
   } = useDecryptedEntry(existingEntry);
 
-  // Always start with a fresh empty text box when dialog opens or day changes
+  // Seed the editor from the existing entry exactly once per open-session for a
+  // given entry id. We never re-seed after the user has started typing (the
+  // latch blocks re-fires when, e.g., a background refetch toggles isDecrypting),
+  // and we never seed plaintext over an entry we couldn't decrypt: a decrypt
+  // failure leaves the editor empty AND save/share disabled, so a blank box can
+  // never silently overwrite content the user can't currently read.
+  const seededKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (open) {
-      setGratitudeText('');
+    if (!open) {
+      seededKeyRef.current = null;
+      return;
     }
-  }, [day, open]);
+
+    const key = `${day?.dateString ?? ''}:${existingEntry?.id ?? 'none'}`;
+    if (seededKeyRef.current === key) return;
+
+    if (!existingEntry) {
+      // No saved entry: a single fresh empty draft box (seeded once).
+      setNotes([makeNote('', 'draft')]);
+      seededKeyRef.current = key;
+      return;
+    }
+
+    // Wait for decryption to settle before seeding — don't latch yet.
+    if (isDecrypting) return;
+
+    if (decryptError) {
+      // Fail-closed: couldn't read it, so don't seed plaintext. Latch to stop
+      // re-firing; the locked UI + disabled save/share guard the rest.
+      setNotes([makeNote('', 'draft')]);
+      seededKeyRef.current = key;
+      return;
+    }
+
+    // Successful decrypt or plaintext passthrough: stored notes seed as
+    // published cards (one per note); empty entry falls back to a draft box.
+    const seeded = splitNotes(entryContent);
+    setNotes(
+      seeded.length > 0
+        ? seeded.map((text) => makeNote(text, 'published'))
+        : [makeNote('', 'draft')]
+    );
+    seededKeyRef.current = key;
+    // Keyed on existingEntry?.id, not the object: a background refetch that
+    // returns an identity-changed-but-same entry must not re-fire seeding.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, day?.dateString, existingEntry?.id, isDecrypting, decryptError, entryContent]);
+
+  // Focus the box for the pending note id once it has mounted as a draft.
+  // Runs after every commit (cheap ref check); Add and Edit set the target id,
+  // so seeding N cards on open never steals focus.
+  useEffect(() => {
+    const id = pendingFocusIdRef.current;
+    if (id === null) return;
+    const handle = editorRefs.current.get(id);
+    if (handle) {
+      pendingFocusIdRef.current = null;
+      handle.focus();
+    }
+  });
 
   // Toggle is shown when the signer supports NIP-44 — or optimistically for
   // bunkers ('unknown'), where support is only discoverable by attempting.
@@ -212,6 +328,64 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   const affirmation = getAffirmationForDay(day.dayOfYear);
   const isPastDay = day.isPast;
 
+  // Editing an existing entry: the editor mustn't accept a save until the entry
+  // has been decrypted and seeded. While decrypting we show a loading state;
+  // when decryption failed we lock the editor entirely (no blank-overwrite path).
+  const hasExistingEntry = !!existingEntry;
+  const entrySeeding = hasExistingEntry && isDecrypting;
+  const entryLocked = hasExistingEntry && !!decryptError;
+  const blockSaveShare = entrySeeding || entryLocked;
+
+  // A day can hold multiple notes inside the one entry. The saved content is
+  // the non-empty notes joined; empty draft boxes are dropped by joinNotes.
+  const joinedNotes = joinNotes(notes.map((note) => note.text));
+  const hasContent = joinedNotes.length > 0;
+  const filledNoteCount = notes.filter((note) => note.text.trim().length > 0).length;
+  const readOnlyNotes = splitNotes(entryContent);
+
+  const updateNote = (id: number, value: string) => {
+    setNotes((prev) =>
+      prev.map((note) => (note.id === id ? { ...note, text: value } : note))
+    );
+  };
+
+  const addNote = () => {
+    const note = makeNote('', 'draft');
+    pendingFocusIdRef.current = note.id;
+    setNotes((prev) => [...prev, note]);
+  };
+
+  const removeNote = (id: number) => {
+    // Never drop to zero notes — keep one empty draft box to write into.
+    setNotes((prev) => {
+      const next = prev.filter((note) => note.id !== id);
+      return next.length > 0 ? next : [makeNote('', 'draft')];
+    });
+  };
+
+  // Editing a published note turns it back into a draft box (focus lands in it).
+  // It stays draft until the next save republishes the whole entry.
+  const editNote = (id: number) => {
+    pendingFocusIdRef.current = id;
+    setNotes((prev) =>
+      prev.map((note) =>
+        note.id === id ? { ...note, status: 'draft' } : note
+      )
+    );
+  };
+
+  // After a successful publish the editor matches what's on relays: show every
+  // saved note as a published card. Publishing doesn't invalidate the entry
+  // query, so we flip optimistically and advance the seed latch to the new
+  // event id (a later refetch with that id then won't re-seed).
+  const markEntryPublished = (savedContent: string, newEventId: string) => {
+    const published = splitNotes(savedContent).map((text) =>
+      makeNote(text, 'published')
+    );
+    setNotes(published.length > 0 ? published : [makeNote('', 'draft')]);
+    seededKeyRef.current = `${day.dateString}:${newEventId}`;
+  };
+
   /**
    * Build the 36669 event for the current editor state. For private entries
    * the content is NIP-44 ciphertext encrypted to the user's own pubkey, the
@@ -226,7 +400,10 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   }> => {
     if (!user || !day) throw new Error('Not ready');
 
-    const trimmedText = gratitudeText.trim();
+    // All of the day's notes live inside the single 36669, blank-line
+    // delimited — one event per day stays the architecture. joinNotes drops
+    // empty boxes, so a freshly added moment left blank never persists.
+    const trimmedText = joinedNotes;
     const timestamp = Math.floor(day.date.getTime() / 1000);
     const baseTags = [
       ['d', day.dateString],
@@ -268,13 +445,16 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   };
 
   const describeEncryptError = (error: unknown): string => {
+    // Always reassure: a fail-closed save keeps the editor open with every note
+    // intact, so the user can retry or switch to Public without retyping.
+    const reassure = 'Nothing was saved — your notes are still here.';
     if (error instanceof Nip44UnsupportedError) {
-      return "Your signer doesn't support NIP-44 encryption. Nothing was published — switch to Public to save with this signer.";
+      return `Your signer doesn't support NIP-44 encryption. ${reassure} Switch to Public to save with this signer.`;
     }
     if (error instanceof EncryptTimeoutError) {
-      return 'Your signer did not respond in time. Nothing was published — try again or switch to Public.';
+      return `Your signer did not respond in time. ${reassure} Try again or switch to Public.`;
     }
-    return `Encryption failed: ${error instanceof Error ? error.message : 'unknown error'}. Nothing was published.`;
+    return `Encryption failed: ${error instanceof Error ? error.message : 'unknown error'}. ${reassure}`;
   };
 
   const handleSave = async () => {
@@ -283,7 +463,11 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
       return;
     }
 
-    if (!gratitudeText.trim()) {
+    // Never save while an existing entry is still decrypting or failed to
+    // decrypt — an empty/partial editor could overwrite content not yet seen.
+    if (blockSaveShare) return;
+
+    if (!hasContent) {
       toast({
         title: 'Empty entry',
         description: 'Please write something before saving.',
@@ -307,20 +491,26 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
 
     storePrivacyDefault(user.pubkey, isPrivate);
 
+    // The plaintext we just committed (used to reflect published cards even for
+    // a Private save, where the event content is ciphertext).
+    const savedContent = joinedNotes;
+
     createEvent(entryEvent, {
-      onSuccess: () => {
+      onSuccess: (data) => {
         toast({
           title: isPrivate ? 'Private reflection saved 🔒' : 'Reflection saved! ✨',
           description: isPrivate
             ? 'Encrypted so only you can read it.'
             : 'Your reflection has been saved.',
         });
-        setGratitudeText(''); // Reset text box for a fresh entry
+        // Whole entry is now committed — every note becomes a published card.
+        markEntryPublished(savedContent, data.id);
       },
-      onError: (error) => {
+      onError: () => {
         toast({
           title: 'Failed to save',
-          description: error.message || 'Please try again.',
+          description:
+            'Nothing was saved — your notes are still here. Please try again.',
           variant: 'destructive',
         });
       },
@@ -333,7 +523,9 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
       return;
     }
 
-    if (!gratitudeText.trim()) {
+    if (blockSaveShare) return;
+
+    if (!hasContent) {
       toast({
         title: 'No reflection to share',
         description: 'Please write something before sharing.',
@@ -342,7 +534,9 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
       return;
     }
 
-    const trimmedText = gratitudeText.trim();
+    // Share posts all of the day's notes (blank-line separated) — NoteContent
+    // renders them as paragraphs in the feed and other clients.
+    const trimmedText = joinedNotes;
 
     // First, save as kind 36669 (encrypted when Private is selected — the
     // kind 1 note below still shares the plaintext by explicit user action).
@@ -364,11 +558,20 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     createEvent(
       entryEvent,
       {
-        onSuccess: () => {
+        onSuccess: (data) => {
+          // The journal entry is committed — reflect published cards now (the
+          // separate kind 1 share below doesn't affect the entry's state).
+          markEntryPublished(trimmedText, data.id);
+
           // After saving kind 36669, post as kind 1 note
           // Rotate through day emojis based on day number
           const dayEmojis = ["☀️", "🌿", "🌅", "🌞", "🌻", "⭐️"];
           const dayEmoji = dayEmojis[(day.dayOfYear - 1) % dayEmojis.length];
+
+          // Each note gets its own 🙏 prefix (not just the first).
+          const notesBlock = splitNotes(trimmedText)
+            .map((note) => `🙏 ${note}`)
+            .join('\n\n');
 
           // Format the content for the kind 1 note
           const noteContent = `Day ${day.dayOfYear} ${dayEmoji}
@@ -378,7 +581,7 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
 
 💫 "${affirmation}"
 
-🙏 ${trimmedText}
+${notesBlock}
 
 https://gratefulday.space`;
 
@@ -405,7 +608,6 @@ https://gratefulday.space`;
                   title: 'Shared to Nostr! 🌟',
                   description: 'Your reflection has been saved and posted to gratefulday.space.',
                 });
-                setGratitudeText(''); // Reset text box for a fresh entry
               },
               onError: (error) => {
                 toast({
@@ -413,15 +615,15 @@ https://gratefulday.space`;
                   description: error.message || 'Your reflection was saved but could not be posted.',
                   variant: 'destructive',
                 });
-                setGratitudeText(''); // Reset text box even if share failed
               },
             }
           );
         },
-        onError: (error) => {
+        onError: () => {
           toast({
             title: 'Failed to save',
-            description: error.message || 'Please try again.',
+            description:
+              'Nothing was saved — your notes are still here. Please try again.',
             variant: 'destructive',
           });
         },
@@ -434,7 +636,8 @@ https://gratefulday.space`;
       setShowLoginDialog(true);
       return;
     }
-    if (!gratitudeText.trim()) {
+    if (blockSaveShare) return;
+    if (!hasContent) {
       toast({
         title: 'No reflection to share',
         description: 'Please write something before sharing.',
@@ -588,9 +791,13 @@ https://gratefulday.space`;
                               decrypt it.
                             </p>
                           ) : (
-                            <p className="text-base text-foreground whitespace-pre-wrap break-words">
-                              {entryContent}
-                            </p>
+                            /* Committed past entry — same published-card look as
+                               today, one card per note, read-only (no Edit). */
+                            <div className="space-y-3">
+                              {readOnlyNotes.map((note, i) => (
+                                <PublishedNoteCard key={i} text={note} />
+                              ))}
+                            </div>
                           )}
                           <p className="text-xs text-muted-foreground">
                             Last updated: {new Date(existingEntry.created_at * 1000).toLocaleString()}
@@ -610,10 +817,11 @@ https://gratefulday.space`;
               <div className="space-y-3">
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-foreground block">
-                    Write a moment of gratitude from today.
+                    Write your moments of gratitude from today.
                   </label>
                   <p className="text-sm text-muted-foreground">
-                    It can be a person, a moment, or something simple.
+                    A person, a moment, or something simple. Leave a blank line
+                    to add another.
                   </p>
                   {!user && (
                     <p className="text-xs text-muted-foreground">
@@ -621,22 +829,101 @@ https://gratefulday.space`;
                     </p>
                   )}
                 </div>
-                <AutocompleteTextarea
-                  value={gratitudeText}
-                  onChange={setGratitudeText}
-                />
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-xs text-muted-foreground">
-                    {gratitudeText.length} characters
+                {entrySeeding ? (
+                  /* Existing entry still decrypting — don't seed or allow save yet. */
+                  <p className="flex items-center gap-2 text-sm text-muted-foreground p-3 border rounded-md min-h-[80px]">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading your entry…
                   </p>
-                  {user && canEncrypt && (
+                ) : entryLocked ? (
+                  /* Couldn't decrypt — lock editing so a blank box can't overwrite it. */
+                  <p className="text-sm text-muted-foreground italic p-3 border rounded-md bg-muted/50">
+                    🔒 This entry is encrypted and your current signer can't
+                    decrypt it. Editing is disabled so you don't overwrite
+                    content you can't see — switch to a signer that supports
+                    NIP-44 to edit it.
+                  </p>
+                ) : (
+                  <>
+                    <div className="space-y-3">
+                      {notes.map((note) =>
+                        note.status === 'published' ? (
+                          /* Committed: matches the version on relays. Edit
+                             republishes the whole entry on the next save. */
+                          <PublishedNoteCard
+                            key={note.id}
+                            text={note.text}
+                            onEdit={() => editNote(note.id)}
+                          />
+                        ) : (
+                          /* Draft: unsaved edits. */
+                          <div key={note.id} className="relative">
+                            {notes.length > 1 && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => removeNote(note.id)}
+                                aria-label="Remove this moment"
+                                className="absolute top-1.5 right-1.5 z-10 h-6 w-6 text-muted-foreground hover:text-destructive"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            <AutocompleteTextarea
+                              ref={(el) => {
+                                if (el) editorRefs.current.set(note.id, el);
+                                else editorRefs.current.delete(note.id);
+                              }}
+                              value={note.text}
+                              onChange={(value) => updateNote(note.id, value)}
+                            />
+                          </div>
+                        )
+                      )}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={addNote}
+                      className="gap-1.5 h-8 text-muted-foreground -ml-1"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Add another moment
+                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                      {filledNoteCount > 1 && `${filledNoteCount} moments · `}
+                      {joinedNotes.length} characters
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Whole-day visibility — one control for the ENTIRE entry, sitting
+                with the save action, never beside an individual note. */}
+            {!isPastDay && !blockSaveShare && (
+              <div className="space-y-2">
+                {user && canEncrypt && (
+                  <div className="rounded-lg border border-border/60 bg-muted/30 p-3 flex items-start justify-between gap-3">
+                    <div className="space-y-0.5">
+                      <p className="text-sm font-medium text-foreground">
+                        This day's entry
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Private encrypts the whole day so only you can read it.
+                        Public posts it to your relays. The date stays visible.
+                      </p>
+                    </div>
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
                       onClick={() => setIsPrivate((p) => !p)}
                       aria-pressed={isPrivate}
-                      className="gap-1.5 h-8"
+                      aria-label={isPrivate ? 'Visibility: Private' : 'Visibility: Public'}
+                      className="gap-1.5 h-8 shrink-0"
                     >
                       {isPrivate ? (
                         <>
@@ -650,14 +937,7 @@ https://gratefulday.space`;
                         </>
                       )}
                     </Button>
-                  )}
-                </div>
-                {user && canEncrypt && (
-                  <p className="text-xs text-muted-foreground text-right">
-                    {isPrivate
-                      ? 'Encrypted so only you can read it. The date stays visible.'
-                      : 'Saved as a public note on your relays.'}
-                  </p>
+                  </div>
                 )}
                 {showNip44Hint && (
                   <p className="text-xs text-muted-foreground">
@@ -698,24 +978,24 @@ https://gratefulday.space`;
                 </Button>
                 <Button
                   onClick={handleSave}
-                  disabled={isEncrypting || isPending || isPublishingNote || !gratitudeText.trim()}
+                  disabled={isEncrypting || isPending || isPublishingNote || blockSaveShare || !hasContent}
                   className="min-w-[100px] order-1 sm:order-2"
                 >
                   {isEncrypting || isPending ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      {isEncrypting ? 'Encrypting…' : 'Saving...'}
+                      {isEncrypting ? 'Encrypting…' : 'Saving entry…'}
                     </>
                   ) : (
                     <>
                       <Save className="h-4 w-4 mr-2" />
-                      Save
+                      Save entry
                     </>
                   )}
                 </Button>
                 <Button
                   onClick={handleShareClick}
-                  disabled={isEncrypting || isPending || isPublishingNote || !gratitudeText.trim()}
+                  disabled={isEncrypting || isPending || isPublishingNote || blockSaveShare || !hasContent}
                   variant="default"
                   className="bg-amber-600 hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600 order-3"
                 >
