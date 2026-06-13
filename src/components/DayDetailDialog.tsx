@@ -1,5 +1,6 @@
 import { AutocompleteTextarea, type AutocompleteTextareaHandle } from './AutocompleteTextarea';
 import { useState, useEffect, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Dialog,
   DialogContent,
@@ -35,7 +36,8 @@ import {
   encryptEntryContent,
   isEncryptedEntry,
 } from '@/lib/privacyUtils';
-import type { NostrSigner } from '@nostrify/nostrify';
+import type { NostrEvent, NostrSigner } from '@nostrify/nostrify';
+import { dedupeEntriesByDTag } from '@/lib/streakUtils';
 import { joinNotes, splitNotes } from '@/lib/entryNotes';
 import { useToast } from '@/hooks/useToast';
 import LoginDialog from './auth/LoginDialog';
@@ -217,6 +219,7 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   const { mutate: publishNote, isPending: isPublishingNote } = useNostrPublish();
   const { mutate: deleteEntry, isPending: isDeleting } = useDeleteGratitudeEntry();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   // Fetch existing entry for this day (only for display in past days, not for editing)
   const { data: existingEntry } = useGratitudeEntry(
@@ -386,6 +389,22 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     seededKeyRef.current = `${day.dateString}:${newEventId}`;
   };
 
+  // Optimistically insert the just-saved event into the entries-LIST cache so
+  // useStreaks, the calendar dot, the heatmap, and milestone detection refresh
+  // instantly — without an invalidate/refetch (which could return the pre-save
+  // event mid-propagation and reseed stale content). Only the list cache is
+  // touched, never ['gratitude-entry', …]: that single-entry query feeds the
+  // editor, and for a Private save its ciphertext would trigger a re-decrypt.
+  // dedupeEntriesByDTag enforces the same latest-created_at-wins invariant the
+  // hooks use, so a stale same-day duplicate can never win.
+  const cacheSavedEntry = (event: NostrEvent) => {
+    if (!user) return;
+    queryClient.setQueryData<NostrEvent[]>(
+      ['gratitude-entries', user.pubkey],
+      (prev) => dedupeEntriesByDTag([...(prev ?? []), event])
+    );
+  };
+
   /**
    * Build the 36669 event for the current editor state. For private entries
    * the content is NIP-44 ciphertext encrypted to the user's own pubkey, the
@@ -505,6 +524,8 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
         });
         // Whole entry is now committed — every note becomes a published card.
         markEntryPublished(savedContent, data.id);
+        // Instant streak/calendar/heatmap/milestone refresh (no refetch).
+        cacheSavedEntry(data);
       },
       onError: () => {
         toast({
@@ -562,6 +583,8 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
           // The journal entry is committed — reflect published cards now (the
           // separate kind 1 share below doesn't affect the entry's state).
           markEntryPublished(trimmedText, data.id);
+          // Instant streak/calendar/heatmap/milestone refresh (no refetch).
+          cacheSavedEntry(data);
 
           // After saving kind 36669, post as kind 1 note
           // Rotate through day emojis based on day number

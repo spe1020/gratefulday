@@ -18,6 +18,14 @@ const toast = vi.fn();
 // Back-compat aliases for existing assertions.
 const createEvent = publish;
 const publishNote = publish;
+// Query client spies — assert optimistic cache writes without a refetch.
+const setQueryData = vi.fn();
+const invalidateQueries = vi.fn();
+
+vi.mock('@tanstack/react-query', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-query')>();
+  return { ...actual, useQueryClient: () => ({ setQueryData, invalidateQueries }) };
+});
 
 vi.mock('@/hooks/useDecryptedEntry', () => ({
   useDecryptedEntry: () => mockDecrypted(),
@@ -220,9 +228,10 @@ describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
   });
 
   it('a successful Public save flips drafts back to published cards', async () => {
-    // Make the publish mock resolve so the optimistic flip runs.
-    publish.mockImplementation((_event, opts) =>
-      opts?.onSuccess?.({ id: 'evt-published-new' })
+    // Make the publish mock resolve so the optimistic flip runs (echo the
+    // event so onSuccess sees a full NostrEvent, as the real signer returns).
+    publish.mockImplementation((event, opts) =>
+      opts?.onSuccess?.({ ...event, id: 'evt-published-new', pubkey: 'pk-self', created_at: 2_000_000_000, sig: 'x' })
     );
     mockExistingEntry.mockReturnValue({ data: null });
     mockDecrypted.mockReturnValue({
@@ -254,6 +263,52 @@ describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
     expect(
       screen.getByRole('button', { name: /edit this moment/i })
     ).toBeInTheDocument();
+  });
+
+  it('optimistically upserts the saved entry into the entries-list cache without a refetch', async () => {
+    publish.mockImplementation((event, opts) =>
+      opts?.onSuccess?.({
+        ...event,
+        id: 'evt-new',
+        pubkey: 'pk-self',
+        created_at: 2_000_000_000,
+        sig: 'x',
+      })
+    );
+    mockExistingEntry.mockReturnValue({ data: null });
+    mockDecrypted.mockReturnValue({
+      content: '',
+      isEncrypted: false,
+      isDecrypting: false,
+      decryptError: null,
+    });
+
+    render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
+    fireEvent.change(await screen.findByTestId('editor'), {
+      target: { value: 'today gratitude' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save entry/i }));
+
+    await waitFor(() => expect(setQueryData).toHaveBeenCalled());
+
+    // Wrote the entries-LIST cache for this pubkey…
+    const call = setQueryData.mock.calls.find(
+      ([key]) => Array.isArray(key) && key[0] === 'gratitude-entries'
+    );
+    expect(call).toBeTruthy();
+    expect(call![0]).toEqual(['gratitude-entries', 'pk-self']);
+
+    // …with an updater that upserts the saved event for its d tag (latest-wins).
+    const updater = call![1] as (prev: NostrEvent[]) => NostrEvent[];
+    const result = updater([]);
+    expect(result).toHaveLength(1);
+    expect(result[0].tags.find(([n]) => n === 'd')?.[1]).toBe('2026-06-13');
+
+    // No single-entry cache write (would re-decrypt a Private save) and no refetch.
+    expect(
+      setQueryData.mock.calls.some(([key]) => key?.[0] === 'gratitude-entry')
+    ).toBe(false);
+    expect(invalidateQueries).not.toHaveBeenCalled();
   });
 
   it('"Add another moment" adds an empty draft box and reveals remove controls', async () => {
