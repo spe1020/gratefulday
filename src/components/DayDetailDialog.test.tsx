@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { forwardRef, useImperativeHandle } from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { NostrEvent } from '@nostrify/nostrify';
 import type { DayInfo } from '@/lib/gratitudeUtils';
 import type { DecryptedEntry } from '@/hooks/useDecryptedEntry';
@@ -9,8 +9,15 @@ import type { DecryptedEntry } from '@/hooks/useDecryptedEntry';
 // entry, so we mock the data hooks and assert the rendered guard directly.
 const mockDecrypted = vi.fn<() => DecryptedEntry>();
 const mockExistingEntry = vi.fn<() => { data: NostrEvent | null }>();
-const createEvent = vi.fn();
-const publishNote = vi.fn();
+const mockUser = vi.fn<() => { user: unknown }>();
+const mockNip44 = vi.fn<() => { supported: boolean | 'unknown' }>();
+// Both useNostrPublish() calls (36669 + kind 1) route through this one spy, so
+// "not called" proves neither the entry nor a kind 1 note was published.
+const publish = vi.fn();
+const toast = vi.fn();
+// Back-compat aliases for existing assertions.
+const createEvent = publish;
+const publishNote = publish;
 
 vi.mock('@/hooks/useDecryptedEntry', () => ({
   useDecryptedEntry: () => mockDecrypted(),
@@ -19,31 +26,38 @@ vi.mock('@/hooks/useGratitudeEntries', () => ({
   useGratitudeEntry: () => mockExistingEntry(),
 }));
 vi.mock('@/hooks/useCurrentUser', () => ({
-  useCurrentUser: () => ({
-    user: { pubkey: 'pk-self', method: 'extension', signer: {} },
-  }),
+  useCurrentUser: () => mockUser(),
 }));
 vi.mock('@/hooks/useNip44Support', () => ({
-  useNip44Support: () => ({ supported: false }),
+  useNip44Support: () => mockNip44(),
   cacheNip44Support: vi.fn(),
 }));
 vi.mock('@/hooks/useNostrPublish', () => ({
-  useNostrPublish: () => ({ mutate: createEvent, isPending: false }),
+  useNostrPublish: () => ({ mutate: publish, isPending: false }),
 }));
 vi.mock('@/hooks/useDeleteGratitudeEntry', () => ({
   useDeleteGratitudeEntry: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock('@/hooks/useToast', () => ({
-  useToast: () => ({ toast: vi.fn() }),
+  useToast: () => ({ toast }),
 }));
 // Editor + login dialog are irrelevant to this guard and pull in providers.
 vi.mock('./AutocompleteTextarea', () => ({
-  AutocompleteTextarea: forwardRef<{ focus: () => void }, { value: string }>(
-    ({ value }, ref) => {
-      useImperativeHandle(ref, () => ({ focus: () => {} }));
-      return <textarea data-testid="editor" defaultValue={value} />;
-    }
-  ),
+  // Controlled stub so the box reflects the current note state (the real editor
+  // syncs value->DOM; defaultValue would not update after the seed effect).
+  AutocompleteTextarea: forwardRef<
+    { focus: () => void },
+    { value: string; onChange: (value: string) => void }
+  >(({ value, onChange }, ref) => {
+    useImperativeHandle(ref, () => ({ focus: () => {} }));
+    return (
+      <textarea
+        data-testid="editor"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }),
 }));
 vi.mock('./auth/LoginDialog', () => ({ default: () => null }));
 
@@ -77,6 +91,11 @@ const encryptedEntry: NostrEvent = {
 describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Defaults: logged-in, signer without NIP-44 (toggle hidden, Public).
+    mockUser.mockReturnValue({
+      user: { pubkey: 'pk-self', method: 'extension', signer: {} },
+    });
+    mockNip44.mockReturnValue({ supported: false });
   });
 
   it('locks Save and Share (no blank-overwrite path) when an existing private entry fails to decrypt', () => {
@@ -275,5 +294,88 @@ describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
     expect(screen.getByText(/loading your entry/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /share to nostr/i })).toBeDisabled();
+  });
+});
+
+describe('DayDetailDialog — failed-save data safety', () => {
+  // A signer that advertises NIP-44 but rejects every encrypt call, so a
+  // Private save fails closed through the real privacyUtils path.
+  const failingSigner = {
+    nip44: {
+      encrypt: () => Promise.reject(new Error('signer refused to encrypt')),
+      decrypt: () => Promise.reject(new Error('signer refused to decrypt')),
+    },
+  };
+
+  // A plaintext entry seeds the editor (no decryption needed); the user then
+  // switches the whole day to Private before saving.
+  const plaintextEntry: NostrEvent = {
+    ...encryptedEntry,
+    id: 'evt-plain',
+    content: 'my unsaved thoughts',
+    tags: [
+      ['d', '2026-06-13'],
+      ['day', '164'],
+      ['published_at', '1700000000'],
+    ],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockNip44.mockReturnValue({ supported: true });
+    mockUser.mockReturnValue({
+      user: { pubkey: 'pk-self', method: 'extension', signer: failingSigner },
+    });
+    mockExistingEntry.mockReturnValue({ data: plaintextEntry });
+    mockDecrypted.mockReturnValue({
+      content: 'my unsaved thoughts',
+      isEncrypted: false,
+      isDecrypting: false,
+      decryptError: null,
+    });
+  });
+
+  async function switchToPrivateThenClick(buttonName: RegExp) {
+    render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
+    // Seeded note is present and editable.
+    expect(await screen.findByTestId('editor')).toHaveValue('my unsaved thoughts');
+    // Flip the whole-day control to Private (it seeds Public for a plaintext entry).
+    fireEvent.click(screen.getByRole('button', { name: /visibility: public/i }));
+    fireEvent.click(screen.getByRole('button', { name: buttonName }));
+  }
+
+  it('keeps the note and fires no event when a Private handleSave fails closed', async () => {
+    await switchToPrivateThenClick(/^save$/i);
+
+    // The encryption rejection surfaces as a reassuring, fail-closed toast.
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'destructive' })
+      )
+    );
+    expect(toast.mock.calls.some(([t]) => /still here/i.test(t.description))).toBe(
+      true
+    );
+    // Nothing was published, and the note is still in the still-open editor.
+    expect(publish).not.toHaveBeenCalled();
+    expect(screen.getByTestId('editor')).toHaveValue('my unsaved thoughts');
+  });
+
+  it('keeps the note and fires NO kind 1 when a Private share fails closed', async () => {
+    // Share of a Private entry routes through the confirm guard first.
+    await switchToPrivateThenClick(/share to nostr/i);
+    fireEvent.click(await screen.findByRole('button', { name: /share publicly/i }));
+
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'destructive' })
+      )
+    );
+    expect(toast.mock.calls.some(([t]) => /still here/i.test(t.description))).toBe(
+      true
+    );
+    // Encryption failed before any publish: neither the 36669 nor a kind 1 fired.
+    expect(publish).not.toHaveBeenCalled();
+    expect(screen.getByTestId('editor')).toHaveValue('my unsaved thoughts');
   });
 });

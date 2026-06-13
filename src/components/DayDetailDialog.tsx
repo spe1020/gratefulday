@@ -353,13 +353,16 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   };
 
   const describeEncryptError = (error: unknown): string => {
+    // Always reassure: a fail-closed save keeps the editor open with every note
+    // intact, so the user can retry or switch to Public without retyping.
+    const reassure = 'Nothing was saved — your notes are still here.';
     if (error instanceof Nip44UnsupportedError) {
-      return "Your signer doesn't support NIP-44 encryption. Nothing was published — switch to Public to save with this signer.";
+      return `Your signer doesn't support NIP-44 encryption. ${reassure} Switch to Public to save with this signer.`;
     }
     if (error instanceof EncryptTimeoutError) {
-      return 'Your signer did not respond in time. Nothing was published — try again or switch to Public.';
+      return `Your signer did not respond in time. ${reassure} Try again or switch to Public.`;
     }
-    return `Encryption failed: ${error instanceof Error ? error.message : 'unknown error'}. Nothing was published.`;
+    return `Encryption failed: ${error instanceof Error ? error.message : 'unknown error'}. ${reassure}`;
   };
 
   const handleSave = async () => {
@@ -407,10 +410,11 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
         // Keep the saved text in the editor; the seed effect re-syncs from the
         // refetched entry. (No reset — this is edit-in-place, not a fresh box.)
       },
-      onError: (error) => {
+      onError: () => {
         toast({
           title: 'Failed to save',
-          description: error.message || 'Please try again.',
+          description:
+            'Nothing was saved — your notes are still here. Please try again.',
           variant: 'destructive',
         });
       },
@@ -510,10 +514,11 @@ https://gratefulday.space`;
             }
           );
         },
-        onError: (error) => {
+        onError: () => {
           toast({
             title: 'Failed to save',
-            description: error.message || 'Please try again.',
+            description:
+              'Nothing was saved — your notes are still here. Please try again.',
             variant: 'destructive',
           });
         },
@@ -777,48 +782,58 @@ https://gratefulday.space`;
                       <Plus className="h-3.5 w-3.5" />
                       Add another moment
                     </Button>
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-xs text-muted-foreground">
-                        {filledNoteCount > 1 && `${filledNoteCount} moments · `}
-                        {joinedNotes.length} characters
-                      </p>
-                      {user && canEncrypt && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setIsPrivate((p) => !p)}
-                          aria-pressed={isPrivate}
-                          className="gap-1.5 h-8"
-                        >
-                          {isPrivate ? (
-                            <>
-                              <Lock className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-                              Private
-                            </>
-                          ) : (
-                            <>
-                              <Globe className="h-3.5 w-3.5" />
-                              Public
-                            </>
-                          )}
-                        </Button>
-                      )}
-                    </div>
-                    {user && canEncrypt && (
-                      <p className="text-xs text-muted-foreground text-right">
-                        {isPrivate
-                          ? 'Encrypted so only you can read it. The date stays visible.'
-                          : 'Saved as a public note on your relays.'}
-                      </p>
-                    )}
-                    {showNip44Hint && (
-                      <p className="text-xs text-muted-foreground">
-                        Your signer doesn't support encryption (NIP-44). Entries
-                        will be saved publicly.
-                      </p>
-                    )}
+                    <p className="text-xs text-muted-foreground">
+                      {filledNoteCount > 1 && `${filledNoteCount} moments · `}
+                      {joinedNotes.length} characters
+                    </p>
                   </>
+                )}
+              </div>
+            )}
+
+            {/* Whole-day visibility — one control for the ENTIRE entry, sitting
+                with the save action, never beside an individual note. */}
+            {!isPastDay && !blockSaveShare && (
+              <div className="space-y-2">
+                {user && canEncrypt && (
+                  <div className="rounded-lg border border-border/60 bg-muted/30 p-3 flex items-start justify-between gap-3">
+                    <div className="space-y-0.5">
+                      <p className="text-sm font-medium text-foreground">
+                        This day's entry
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Private encrypts the whole day so only you can read it.
+                        Public posts it to your relays. The date stays visible.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setIsPrivate((p) => !p)}
+                      aria-pressed={isPrivate}
+                      aria-label={isPrivate ? 'Visibility: Private' : 'Visibility: Public'}
+                      className="gap-1.5 h-8 shrink-0"
+                    >
+                      {isPrivate ? (
+                        <>
+                          <Lock className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                          Private
+                        </>
+                      ) : (
+                        <>
+                          <Globe className="h-3.5 w-3.5" />
+                          Public
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                )}
+                {showNip44Hint && (
+                  <p className="text-xs text-muted-foreground">
+                    Your signer doesn't support encryption (NIP-44). Entries
+                    will be saved publicly.
+                  </p>
                 )}
               </div>
             )}
