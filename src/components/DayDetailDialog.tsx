@@ -28,6 +28,7 @@ import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useGratitudeEntry } from '@/hooks/useGratitudeEntries';
 import { useDeleteGratitudeEntry } from '@/hooks/useDeleteGratitudeEntry';
 import { useNip44Support, cacheNip44Support } from '@/hooks/useNip44Support';
+import { useAppSettings } from '@/hooks/useAppSettings';
 import { useDecryptedEntry } from '@/hooks/useDecryptedEntry';
 import {
   ENCRYPTED_ALT,
@@ -92,8 +93,8 @@ function PublishedNoteCard({
   );
 }
 
-/** Last-used privacy choice per pubkey; seeds the toggle for new entries. */
-const PRIVACY_DEFAULT_KEY = 'gratefulday:privacy-default:v1';
+// The per-entry privacy default is now durable + synced via useAppSettings
+// (NIP-78), with the same localStorage key kept as its cache layer.
 /** Pubkeys that have already seen the "signer can't encrypt" hint. */
 const NIP44_HINT_KEY = 'gratefulday:nip44-hint-shown:v1';
 
@@ -112,16 +113,6 @@ function writeJsonRecord(key: string, record: Record<string, boolean>): void {
   } catch {
     // Persistence unavailable — defaults just won't stick across sessions.
   }
-}
-
-function getStoredPrivacyDefault(pubkey: string): boolean | undefined {
-  return readJsonRecord(PRIVACY_DEFAULT_KEY)[pubkey];
-}
-
-function storePrivacyDefault(pubkey: string, isPrivate: boolean): void {
-  const record = readJsonRecord(PRIVACY_DEFAULT_KEY);
-  record[pubkey] = isPrivate;
-  writeJsonRecord(PRIVACY_DEFAULT_KEY, record);
 }
 
 function takeNip44HintSlot(pubkey: string): boolean {
@@ -215,6 +206,12 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   const [showShareGuard, setShowShareGuard] = useState(false);
   const { user } = useCurrentUser();
   const { supported: nip44Supported } = useNip44Support();
+  const { settings: appSettings, updateSettings: updateAppSettings } = useAppSettings();
+  // Snapshot of the synced privacy default, read non-reactively when the dialog
+  // opens (mirrors the previous stored-value read) so a relay reconcile arriving
+  // mid-edit can't flip the user's in-progress toggle.
+  const privacyDefaultRef = useRef(appSettings.privacyDefault);
+  privacyDefaultRef.current = appSettings.privacyDefault;
   const { mutate: createEvent, isPending } = useNostrPublish();
   const { mutate: publishNote, isPending: isPublishingNote } = useNostrPublish();
   const { mutate: deleteEntry, isPending: isDeleting } = useDeleteGratitudeEntry();
@@ -312,7 +309,7 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     } else if (existingEntry) {
       setIsPrivate(isEncryptedEntry(existingEntry));
     } else {
-      setIsPrivate(getStoredPrivacyDefault(user.pubkey) ?? (nip44Supported === true));
+      setIsPrivate(privacyDefaultRef.current ?? (nip44Supported === true));
     }
   }, [open, day, existingEntry, user, canEncrypt, nip44Supported]);
 
@@ -511,7 +508,7 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
       return;
     }
 
-    storePrivacyDefault(user.pubkey, isPrivate);
+    updateAppSettings({ privacyDefault: isPrivate });
 
     // The plaintext we just committed (used to reflect published cards even for
     // a Private save, where the event content is ciphertext).
@@ -577,7 +574,7 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
       return;
     }
 
-    storePrivacyDefault(user.pubkey, isPrivate);
+    updateAppSettings({ privacyDefault: isPrivate });
 
     createEvent(
       entryEvent,

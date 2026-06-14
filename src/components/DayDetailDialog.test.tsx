@@ -43,6 +43,14 @@ vi.mock('@/hooks/useNip44Support', () => ({
 vi.mock('@/hooks/useNostrPublish', () => ({
   useNostrPublish: () => ({ mutate: publish, isPending: false }),
 }));
+const updateAppSettings = vi.fn();
+vi.mock('@/hooks/useAppSettings', () => ({
+  useAppSettings: () => ({
+    settings: { celebratedMilestones: [] },
+    updateSettings: updateAppSettings,
+    isLoading: false,
+  }),
+}));
 vi.mock('@/hooks/useDeleteGratitudeEntry', () => ({
   useDeleteGratitudeEntry: () => ({ mutate: vi.fn(), isPending: false }),
 }));

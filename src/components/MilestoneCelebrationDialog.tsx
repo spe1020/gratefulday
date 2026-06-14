@@ -11,12 +11,9 @@ import { Button } from '@/components/ui/button';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useStreaks } from '@/hooks/useStreaks';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
+import { useAppSettings } from '@/hooks/useAppSettings';
 import { useToast } from '@/hooks/useToast';
-import { getReachedMilestones } from '@/lib/streakUtils';
-import {
-  hasMilestoneBeenCelebrated,
-  markMilestonesCelebratedUpTo,
-} from '@/lib/milestoneStore';
+import { MILESTONES, pickCelebration } from '@/lib/streakUtils';
 
 const MILESTONE_COPY: Record<number, { title: string; message: string }> = {
   1: {
@@ -73,27 +70,37 @@ export function MilestoneCelebrationDialog() {
   const { user } = useCurrentUser();
   const { current, total, isLoading } = useStreaks();
   const { mutate: publish, isPending } = useNostrPublish();
+  const { settings, updateSettings } = useAppSettings();
   const { toast } = useToast();
   const [milestone, setMilestone] = useState<number | null>(null);
 
   const pubkey = user?.pubkey;
+  const celebrated = settings.celebratedMilestones;
 
   useEffect(() => {
     // Gate on a settled, non-empty result so the loading transition
     // (entries briefly empty) can't misfire or mark anything.
     if (!pubkey || isLoading || total === 0) return;
 
-    const pending = getReachedMilestones(current).filter(
-      (m) => !hasMilestoneBeenCelebrated(pubkey, m)
-    );
-    if (pending.length === 0) return;
+    const next = pickCelebration({
+      total,
+      current,
+      isCelebrated: (m) => celebrated.includes(m),
+    });
+    if (next === null) return;
 
-    const highest = pending[pending.length - 1];
-    // Mark immediately (sharing is opt-in; closing without sharing keeps it
-    // celebrated) so the effect can't re-fire on later renders.
-    markMilestonesCelebratedUpTo(pubkey, highest);
-    setMilestone(highest);
-  }, [pubkey, isLoading, total, current]);
+    // Day-1 (foundation) is derived from data and never stored — only the
+    // streak milestones (7+) are marked, via the synced settings hook (which
+    // unions, so a long streak on a fresh device marks every lower milestone
+    // and fires one dialog). Marking is immediate (sharing is opt-in; closing
+    // without sharing keeps it celebrated) so the effect can't re-fire.
+    if (next > 1) {
+      updateSettings({
+        celebratedMilestones: MILESTONES.filter((m) => m > 1 && m <= next),
+      });
+    }
+    setMilestone(next);
+  }, [pubkey, isLoading, total, current, celebrated, updateSettings]);
 
   const copy = milestone !== null ? MILESTONE_COPY[milestone] : null;
   // Day 1 is a "foundation" celebration, not a streak trophy — distinct icon,

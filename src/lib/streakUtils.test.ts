@@ -7,8 +7,12 @@ import {
   getEntryDateStrings,
   getNextMilestone,
   getReachedMilestones,
+  pickCelebration,
   shouldShowMilestoneHint,
 } from './streakUtils';
+
+const never = () => false;
+const always = () => true;
 
 function makeEvent(dTag: string, created_at = 1000): NostrEvent {
   return {
@@ -234,5 +238,40 @@ describe('shouldShowMilestoneHint', () => {
   it('hides once past the final milestone', () => {
     expect(shouldShowMilestoneHint(365)).toBe(false);
     expect(shouldShowMilestoneHint(400)).toBe(false);
+  });
+});
+
+describe('pickCelebration', () => {
+  it('fires the day-1 foundation when total === 1, regardless of streak', () => {
+    expect(pickCelebration({ total: 1, current: 1, isCelebrated: never })).toBe(1);
+    // Lone old entry: first-ever entry but the streak has lapsed.
+    expect(pickCelebration({ total: 1, current: 0, isCelebrated: never })).toBe(1);
+  });
+
+  it('does NOT fire day-1 for an established account with an empty store', () => {
+    // The regression: wiped browser, total > 1 — must never re-pop day-1.
+    expect(pickCelebration({ total: 300, current: 5, isCelebrated: never })).toBeNull();
+  });
+
+  it('never returns milestone 1 through the streak-store path', () => {
+    // total > 1 with a 1-day current streak: foundation must not leak back in.
+    expect(pickCelebration({ total: 2, current: 1, isCelebrated: never })).toBeNull();
+  });
+
+  it('fires the highest un-celebrated streak milestone (7+)', () => {
+    expect(pickCelebration({ total: 30, current: 30, isCelebrated: never })).toBe(30);
+    expect(pickCelebration({ total: 10, current: 7, isCelebrated: never })).toBe(7);
+  });
+
+  it('skips already-celebrated streak milestones', () => {
+    // 7 celebrated, 14 reached and not — fire 14.
+    const only7 = (m: number) => m === 7;
+    expect(pickCelebration({ total: 20, current: 14, isCelebrated: only7 })).toBe(14);
+    // All reached milestones celebrated — nothing fires.
+    expect(pickCelebration({ total: 40, current: 30, isCelebrated: always })).toBeNull();
+  });
+
+  it('returns null between milestones', () => {
+    expect(pickCelebration({ total: 5, current: 5, isCelebrated: never })).toBeNull();
   });
 });
