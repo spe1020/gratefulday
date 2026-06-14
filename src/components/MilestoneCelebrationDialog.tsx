@@ -22,7 +22,7 @@ const MILESTONE_COPY: Record<number, { title: string; message: string }> = {
   1: {
     title: 'You planted the seed',
     message:
-      'Your first reflection is in. This is the foundation — every gratitude practice begins with a single day. Come back tomorrow and watch it grow.',
+      'Your first reflection is in. This is the foundation — every gratitude practice begins with a single day. Keep showing up and watch it grow.',
   },
   7: {
     title: 'One full week!',
@@ -103,7 +103,7 @@ export function MilestoneCelebrationDialog() {
   const handleShare = () => {
     if (milestone === null) return;
     const content = isFoundation
-      ? `I started my gratitude practice today 🌱\n\nhttps://gratefulday.space`
+      ? `I started my gratitude practice 🌱\n\nhttps://gratefulday.space`
       : `Day streak milestone: ${milestone} days of gratitude 🔥\n\nhttps://gratefulday.space`;
     publish(
       {
