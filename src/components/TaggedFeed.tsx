@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Hash, RefreshCw, Sparkles } from 'lucide-react';
 import { useTaggedGratitude, type TaggedFilter } from '@/hooks/useTaggedGratitude';
+import { useFeedModeration } from '@/hooks/useFeedModeration';
 import { TaggedNoteCard } from '@/components/TaggedNoteCard';
 import { filterTaggedNotes } from '@/lib/taggedFeedUtils';
 import { cn } from '@/lib/utils';
@@ -27,12 +28,15 @@ export function TaggedFeed() {
     isFetchingNextPage,
   } = useTaggedGratitude(filter);
 
+  const { hiddenIds, mutedPubkeys, hideNote, mutePubkey } = useFeedModeration();
+
   // Flatten pages, then filter + dedup. The feed surfaces arbitrary public
-  // notes, so filterTaggedNotes drops replies, empty notes, and spam (and
-  // collapses relay resends across page boundaries).
+  // notes, so filterTaggedNotes drops replies, empty notes, and spam, plus any
+  // notes the viewer has hidden or authors they've muted (and collapses relay
+  // resends across page boundaries).
   const notes = useMemo(
-    () => filterTaggedNotes((data?.pages ?? []).flat()),
-    [data]
+    () => filterTaggedNotes((data?.pages ?? []).flat(), { hiddenIds, mutedPubkeys }),
+    [data, hiddenIds, mutedPubkeys]
   );
 
   return (
@@ -118,7 +122,12 @@ export function TaggedFeed() {
       ) : notes.length > 0 ? (
         <div className="space-y-4 max-w-2xl mx-auto">
           {notes.map((event) => (
-            <TaggedNoteCard key={event.id} event={event} />
+            <TaggedNoteCard
+              key={event.id}
+              event={event}
+              onHide={hideNote}
+              onMute={mutePubkey}
+            />
           ))}
           <div className="flex justify-center pt-2">
             {hasNextPage ? (
