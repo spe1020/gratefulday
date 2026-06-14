@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { useHead } from '@unhead/react';
 import { CalendarView } from '@/components/CalendarView';
-import { CommunityFeed } from '@/components/CommunityFeed';
+import { CommunitySection } from '@/components/CommunitySection';
 import { LoginArea } from '@/components/auth/LoginArea';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -227,7 +227,7 @@ export default function Index() {
 
           <TabsContent value="community" className="mt-0">
             <div className="container mx-auto px-4 pt-4 pb-16">
-              <CommunityFeed />
+              <CommunitySection />
             </div>
           </TabsContent>
         </section>
