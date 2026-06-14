@@ -12,27 +12,16 @@ vi.mock('@/hooks/useGratitudeEntries', () => ({
   useGratitudeEntries: () => mockEntries(),
 }));
 
-import { GratitudeHeatmap } from './GratitudeHeatmap';
+import { GratitudeVine } from './GratitudeVine';
 
-const TODAY = new Date(2026, 5, 13); // 2026-06-13 (local)
-
-// Mirror the component's title formatting so the assertion can't drift with
-// the CI locale/timezone.
-function cellLabel(date: Date, state: 'reflected' | 'no entry'): string {
-  const formatted = date.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-  return `${formatted} — ${state}`;
-}
+const TODAY = new Date(2026, 5, 13); // Sat 2026-06-13
 
 function entry(dateString: string): NostrEvent {
   return {
     id: `evt-${dateString}`,
     pubkey: 'pk-self',
     kind: 36669,
-    content: 'whatever (never read)',
+    content: 'never read by the vine',
     created_at: 1_700_000_000,
     sig: 'sig',
     tags: [
@@ -43,56 +32,68 @@ function entry(dateString: string): NostrEvent {
   };
 }
 
-describe('GratitudeHeatmap', () => {
+describe('GratitudeVine', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUser.mockReturnValue({ user: { pubkey: 'pk-self' } });
   });
 
-  it('renders one filled cell per in-window entry date (presence-based)', () => {
+  it('renders a labelled vine summarizing unique journaled days', () => {
     mockEntries.mockReturnValue({
       data: [entry('2026-06-13'), entry('2026-06-10'), entry('2026-01-01')],
       isLoading: false,
     });
 
-    render(<GratitudeHeatmap today={TODAY} />);
+    render(<GratitudeVine today={TODAY} />);
 
-    const filled = screen.getAllByTitle(/— reflected$/);
-    expect(filled).toHaveLength(3);
-    // Today's entry is present and labelled (label computed via the same
-    // toLocaleDateString options the component uses).
-    expect(
-      screen.getByTitle(cellLabel(new Date(2026, 5, 13), 'reflected'))
-    ).toBeInTheDocument();
-    // A day without an entry reads as "no entry", never decrypted content.
-    expect(
-      screen.getByTitle(cellLabel(new Date(2026, 5, 12), 'no entry'))
-    ).toBeInTheDocument();
+    const vine = screen.getByRole('img', { name: /gratitude vine/i });
+    expect(vine).toBeInTheDocument();
+    expect(vine).toHaveAttribute(
+      'aria-label',
+      'Gratitude vine: 3 days journaled over the past year'
+    );
+    // One sprig (<g> with a week <title>) per week in the trailing window.
+    expect(screen.getAllByText(/^Week of .+ — \d+ days?$/)).toHaveLength(53);
   });
 
-  it('dedupes multiple events for the same day into a single filled cell', () => {
+  it('dedupes multiple events for the same day (counts unique days)', () => {
     mockEntries.mockReturnValue({
       data: [entry('2026-06-13'), entry('2026-06-13')],
       isLoading: false,
     });
 
-    render(<GratitudeHeatmap today={TODAY} />);
-    expect(screen.getAllByTitle(/— reflected$/i)).toHaveLength(1);
+    render(<GratitudeVine today={TODAY} />);
+    expect(screen.getByRole('img', { name: /gratitude vine/i })).toHaveAttribute(
+      'aria-label',
+      'Gratitude vine: 1 day journaled over the past year'
+    );
+  });
+
+  it('reports a full 7/7 week (the bloom condition) in its sprig title', () => {
+    // A completed week entirely in the past: Sun 2026-05-31 .. Sat 2026-06-06.
+    const fullWeek = [
+      '2026-05-31', '2026-06-01', '2026-06-02', '2026-06-03',
+      '2026-06-04', '2026-06-05', '2026-06-06',
+    ].map(entry);
+    mockEntries.mockReturnValue({ data: fullWeek, isLoading: false });
+
+    render(<GratitudeVine today={TODAY} />);
+    expect(screen.getByText('Week of May 31 — 7 days')).toBeInTheDocument();
   });
 
   it('self-hides when logged out, loading, or with zero entries', () => {
     mockUser.mockReturnValue({ user: undefined });
     mockEntries.mockReturnValue({ data: [], isLoading: false });
-    const { container: loggedOut } = render(<GratitudeHeatmap today={TODAY} />);
+    const { container: loggedOut } = render(<GratitudeVine today={TODAY} />);
     expect(loggedOut).toBeEmptyDOMElement();
 
     mockUser.mockReturnValue({ user: { pubkey: 'pk-self' } });
     mockEntries.mockReturnValue({ data: undefined, isLoading: true });
-    const { container: loading } = render(<GratitudeHeatmap today={TODAY} />);
+    const { container: loading } = render(<GratitudeVine today={TODAY} />);
     expect(loading).toBeEmptyDOMElement();
 
     mockEntries.mockReturnValue({ data: [], isLoading: false });
-    const { container: empty } = render(<GratitudeHeatmap today={TODAY} />);
+    const { container: empty } = render(<GratitudeVine today={TODAY} />);
     expect(empty).toBeEmptyDOMElement();
   });
 });
