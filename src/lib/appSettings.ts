@@ -14,6 +14,10 @@ import {
   decryptEntryContent,
   encryptEntryContent,
 } from '@/lib/privacyUtils';
+import {
+  getCelebratedMilestones,
+  setCelebratedMilestones,
+} from '@/lib/milestoneStore';
 
 /** Standard NIP-78 application-data kind (addressable). */
 export const SETTINGS_KIND = 30078;
@@ -148,16 +152,15 @@ export function buildSettingsEvent(ciphertext: string): {
 
 // --- localStorage cache layer ----------------------------------------------
 // The cache reads/writes the SAME keys the app already uses, so the hook and
-// the existing consumers (DayDetailDialog privacy default, milestoneStore)
-// never diverge. Phase 3 routes those consumers through this hook; the keys
-// stay as the cache layer behind it.
+// the existing consumers never diverge. The milestone cache delegates to
+// `milestoneStore` (it owns that key); the privacy default lives under its own
+// existing key. Both stay as the cache layer behind `useAppSettings`.
 
 const PRIVACY_DEFAULT_KEY = 'gratefulday:privacy-default:v1';
-const MILESTONES_KEY = 'gratefulday:milestones:v1';
 
-function readMap<T>(key: string): Record<string, T> {
+function readPrivacyMap(): Record<string, boolean> {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = localStorage.getItem(PRIVACY_DEFAULT_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === 'object' ? parsed : {};
@@ -166,9 +169,9 @@ function readMap<T>(key: string): Record<string, T> {
   }
 }
 
-function writeMap(key: string, map: Record<string, unknown>): void {
+function writePrivacyMap(map: Record<string, boolean>): void {
   try {
-    localStorage.setItem(key, JSON.stringify(map));
+    localStorage.setItem(PRIVACY_DEFAULT_KEY, JSON.stringify(map));
   } catch {
     // localStorage unavailable (private mode, quota) — relay remains the
     // durable store; the cache just won't persist this session.
@@ -177,12 +180,11 @@ function writeMap(key: string, map: Record<string, unknown>): void {
 
 /** Read the local cache for a pubkey. Day-1 (`1`) is filtered out — never stored. */
 export function readLocalCache(pubkey: string): AppSettings {
-  const privacy = readMap<boolean>(PRIVACY_DEFAULT_KEY)[pubkey];
-  const milestones = readMap<number[]>(MILESTONES_KEY)[pubkey] ?? [];
+  const privacy = readPrivacyMap()[pubkey];
   return {
     privacyDefault: typeof privacy === 'boolean' ? privacy : undefined,
     celebratedMilestones: unionSorted(
-      milestones.filter((m) => m > 1),
+      getCelebratedMilestones(pubkey).filter((m) => m > 1),
       []
     ),
   };
@@ -191,14 +193,9 @@ export function readLocalCache(pubkey: string): AppSettings {
 /** Write-through the cache for a pubkey, preserving other pubkeys' entries. */
 export function writeLocalCache(pubkey: string, settings: AppSettings): void {
   if (settings.privacyDefault !== undefined) {
-    const privacyMap = readMap<boolean>(PRIVACY_DEFAULT_KEY);
+    const privacyMap = readPrivacyMap();
     privacyMap[pubkey] = settings.privacyDefault;
-    writeMap(PRIVACY_DEFAULT_KEY, privacyMap);
+    writePrivacyMap(privacyMap);
   }
-  const milestoneMap = readMap<number[]>(MILESTONES_KEY);
-  milestoneMap[pubkey] = unionSorted(
-    settings.celebratedMilestones.filter((m) => m > 1),
-    []
-  );
-  writeMap(MILESTONES_KEY, milestoneMap);
+  setCelebratedMilestones(pubkey, settings.celebratedMilestones.filter((m) => m > 1));
 }

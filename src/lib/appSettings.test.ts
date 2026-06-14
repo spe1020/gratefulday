@@ -22,6 +22,7 @@ import {
   serializeSettings,
   writeLocalCache,
 } from './appSettings';
+import { pickCelebration } from './streakUtils';
 
 // In-memory localStorage for the cache tests (node has none).
 const store = new Map<string, string>();
@@ -180,5 +181,35 @@ describe('localStorage cache', () => {
     const local = readLocalCache(PK);
     expect(local).toEqual({ privacyDefault: true, celebratedMilestones: [7, 14] });
     expect(needsSeed(false, local)).toBe(true);
+  });
+});
+
+describe('durability across a cache wipe (Phase 3)', () => {
+  const PK = 'wipe-pubkey';
+
+  it('privacy default hydrates from the relay event after a cache wipe', () => {
+    // Cache wiped: nothing local for this pubkey.
+    expect(readLocalCache(PK).privacyDefault).toBeUndefined();
+    // The user's decrypted settings event carries privacyDefault = true; the
+    // relay value wins, restoring the preference on the wiped device.
+    const restored = reconcile(readLocalCache(PK), {
+      privacyDefault: true,
+      celebratedMilestones: [],
+    });
+    expect(restored.privacyDefault).toBe(true);
+  });
+
+  it('a milestone celebrated on the relay does not re-fire after a cache wipe', () => {
+    // Cache wiped, but the relay event still records the streak milestones.
+    const settings = reconcile(readLocalCache(PK), { celebratedMilestones: [7, 14, 30] });
+    // MilestoneCelebrationDialog gates on this reconciled set — 30 is present,
+    // so a long-streak account on a fresh device fires nothing.
+    expect(
+      pickCelebration({
+        total: 50,
+        current: 30,
+        isCelebrated: (m) => settings.celebratedMilestones.includes(m),
+      })
+    ).toBeNull();
   });
 });
