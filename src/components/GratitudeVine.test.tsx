@@ -81,6 +81,31 @@ describe('GratitudeVine', () => {
     expect(screen.getByText('Week of May 31 — 7 days')).toBeInTheDocument();
   });
 
+  it('draws one leaflet per journaled day and no bloom below a full week', () => {
+    // 3 days in one completed past week; every other week is empty.
+    const dates = ['2026-05-31', '2026-06-02', '2026-06-04'].map(entry);
+    mockEntries.mockReturnValue({ data: dates, isLoading: false });
+
+    const { container } = render(<GratitudeVine today={TODAY} />);
+    // Leaflets are <ellipse>; exactly one per journaled day.
+    expect(container.querySelectorAll('ellipse')).toHaveLength(3);
+    // No bloom (amber petals) unless a week is 7/7.
+    expect(container.querySelectorAll('[class~="fill-amber-400"]')).toHaveLength(0);
+  });
+
+  it('draws 7 leaflets and a bloom for a full 7/7 week', () => {
+    const fullWeek = [
+      '2026-05-31', '2026-06-01', '2026-06-02', '2026-06-03',
+      '2026-06-04', '2026-06-05', '2026-06-06',
+    ].map(entry);
+    mockEntries.mockReturnValue({ data: fullWeek, isLoading: false });
+
+    const { container } = render(<GratitudeVine today={TODAY} />);
+    expect(container.querySelectorAll('ellipse')).toHaveLength(7);
+    // Bloom = 5 amber petals (plus a darker amber center).
+    expect(container.querySelectorAll('[class~="fill-amber-400"]')).toHaveLength(5);
+  });
+
   it('self-hides when logged out, loading, or with zero entries', () => {
     mockUser.mockReturnValue({ user: undefined });
     mockEntries.mockReturnValue({ data: [], isLoading: false });

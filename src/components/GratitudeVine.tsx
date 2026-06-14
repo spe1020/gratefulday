@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useGratitudeEntries } from '@/hooks/useGratitudeEntries';
 import { getEntryDateStrings } from '@/lib/streakUtils';
@@ -105,6 +105,15 @@ export function GratitudeVine({ today }: GratitudeVineProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries, nowKey]);
 
+  // Open pinned to the right edge (the current week) instead of flashing the
+  // oldest week first. useLayoutEffect runs before paint, so there's no
+  // left-edge flash; re-runs when the buckets change (e.g. a new entry).
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [buckets]);
+
   // Mirror StreakBadge: self-hide while logged out, loading, or before any
   // entry exists — so there's no empty layout shift.
   if (!user || isLoading || count === 0) {
@@ -126,7 +135,7 @@ export function GratitudeVine({ today }: GratitudeVineProps) {
           </span>
         </div>
 
-        <div className="overflow-x-auto pb-1">
+        <div ref={scrollRef} className="overflow-x-auto pb-1">
           <svg
             width={width}
             height={HEIGHT}
