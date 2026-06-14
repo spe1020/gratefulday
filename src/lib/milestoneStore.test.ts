@@ -38,8 +38,26 @@ describe('milestoneStore cache layer', () => {
     expect(getCelebratedMilestones(OTHER)).toEqual([30]);
   });
 
+  it('strips day-1 (milestone 1) at the storage boundary', () => {
+    setCelebratedMilestones(PK, [1, 7, 14]);
+    expect(getCelebratedMilestones(PK)).toEqual([7, 14]);
+  });
+
   it('tolerates corrupt storage by reading as empty', () => {
     localStorage.setItem(MILESTONE_STORAGE_KEY, 'not json');
     expect(getCelebratedMilestones(PK)).toEqual([]);
+  });
+
+  it('degrades a non-array pubkey value to empty instead of throwing', () => {
+    localStorage.setItem(MILESTONE_STORAGE_KEY, JSON.stringify({ [PK]: 'oops' }));
+    expect(getCelebratedMilestones(PK)).toEqual([]);
+  });
+
+  it('recovers from an array-corrupted store: a subsequent write still persists', () => {
+    // An array stringifies dropping named props, so writes onto it would vanish
+    // unless readStore rejects arrays. Prove the write survives a round-trip.
+    localStorage.setItem(MILESTONE_STORAGE_KEY, '[]');
+    setCelebratedMilestones(PK, [7]);
+    expect(getCelebratedMilestones(PK)).toEqual([7]);
   });
 });

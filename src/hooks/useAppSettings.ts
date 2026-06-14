@@ -139,9 +139,15 @@ export function useAppSettings(): UseAppSettingsResult {
       };
       writeLocalCache(pubkey, next);
       setLocalCache(next);
+      // Optimistically advance the query cache so the local write takes effect
+      // immediately. Otherwise `reconcile` would keep preferring the stale
+      // remote event's privacyDefault until publish + refetch — and if
+      // publishing fails or we're offline, the UI would never reflect the
+      // write even though it's safely cached. This keeps the hook fail-soft.
+      queryClient.setQueryData(['app-settings', pubkey], next);
       void publishSettings(next);
     },
-    [pubkey, settings, publishSettings]
+    [pubkey, settings, publishSettings, queryClient]
   );
 
   // Migration: seed the relay event once from existing local values when no

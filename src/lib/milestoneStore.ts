@@ -15,7 +15,10 @@ function readStore(): MilestoneStore {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    // Reject non-objects AND arrays: assigning `store[pubkey]` to an array and
+    // then JSON.stringify-ing it silently drops the write (named props on an
+    // array are ignored), so a corrupt `'[]'` would make writes vanish.
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -30,14 +33,19 @@ function writeStore(store: MilestoneStore): void {
   }
 }
 
-/** Celebrated milestones for a pubkey, ascending. */
+/** Celebrated milestones for a pubkey, ascending. Degrades a corrupt/non-array
+ *  value (or non-number elements) to an empty set rather than throwing. */
 export function getCelebratedMilestones(pubkey: string): number[] {
-  return readStore()[pubkey] ?? [];
+  const value = readStore()[pubkey];
+  if (!Array.isArray(value)) return [];
+  return value.filter((m): m is number => typeof m === 'number');
 }
 
 /** Replace the celebrated set for a pubkey, preserving other pubkeys. */
 export function setCelebratedMilestones(pubkey: string, milestones: number[]): void {
   const store = readStore();
-  store[pubkey] = [...new Set(milestones)].sort((a, b) => a - b);
+  // Enforce the invariant at the storage boundary: day-1 (`1`) is never cached
+  // here — it's derived from data. Dedupe + sort for a stable, comparable set.
+  store[pubkey] = [...new Set(milestones.filter((m) => m > 1))].sort((a, b) => a - b);
   writeStore(store);
 }

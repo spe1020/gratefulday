@@ -163,7 +163,10 @@ function readPrivacyMap(): Record<string, boolean> {
     const raw = localStorage.getItem(PRIVACY_DEFAULT_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    // Reject non-objects AND arrays: writing `privacyMap[pubkey] = ...` onto an
+    // array then JSON.stringify-ing it drops the write, so a corrupt `'[]'`
+    // would stop the privacy default from ever persisting.
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
