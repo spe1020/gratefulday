@@ -115,6 +115,39 @@ export function getReachedMilestones(current: number): number[] {
   return MILESTONES.filter((milestone) => current >= milestone);
 }
 
+export interface CelebrationInput {
+  /** Unique entry days — `1` means a true first-ever entry. */
+  total: number;
+  /** Current consecutive-day streak. */
+  current: number;
+  /** Whether a streak milestone (7+) has already been celebrated. */
+  isCelebrated: (milestone: number) => boolean;
+}
+
+/**
+ * Decide which celebration (if any) to show. Two distinct tiers:
+ *
+ * - Day-1 "foundation" (milestone `1`) is derived purely from data — the user's
+ *   first-ever entry, `total === 1` — and is NEVER persisted. A wiped browser on
+ *   an established account (`total > 1`) therefore can't re-pop it. (Trade-off:
+ *   a user stuck at exactly one entry may see it again in a later session; that
+ *   is the correct cost of the no-stored-flag rule — do not add a flag to "fix" it.)
+ * - Streak milestones (7+) stay celebrated-store gated via `isCelebrated`, so
+ *   each fires once. `1` is filtered out of this tier so it can't leak back in
+ *   through `getReachedMilestones`.
+ *
+ * Returns the milestone to celebrate, or null. The highest pending streak
+ * milestone wins (a fresh device with a long streak sees one dialog, not many).
+ */
+export function pickCelebration({ total, current, isCelebrated }: CelebrationInput): number | null {
+  if (total === 1) return 1;
+
+  const pending = getReachedMilestones(current).filter(
+    (m) => m > 1 && !isCelebrated(m)
+  );
+  return pending.length > 0 ? pending[pending.length - 1] : null;
+}
+
 /** The next milestone ahead of the given streak length, or null past 365. */
 export function getNextMilestone(current: number): number | null {
   return MILESTONES.find((milestone) => milestone > current) ?? null;

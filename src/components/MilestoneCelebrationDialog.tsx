@@ -12,7 +12,7 @@ import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useStreaks } from '@/hooks/useStreaks';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useToast } from '@/hooks/useToast';
-import { getReachedMilestones } from '@/lib/streakUtils';
+import { pickCelebration } from '@/lib/streakUtils';
 import {
   hasMilestoneBeenCelebrated,
   markMilestonesCelebratedUpTo,
@@ -83,16 +83,19 @@ export function MilestoneCelebrationDialog() {
     // (entries briefly empty) can't misfire or mark anything.
     if (!pubkey || isLoading || total === 0) return;
 
-    const pending = getReachedMilestones(current).filter(
-      (m) => !hasMilestoneBeenCelebrated(pubkey, m)
-    );
-    if (pending.length === 0) return;
+    const next = pickCelebration({
+      total,
+      current,
+      isCelebrated: (m) => hasMilestoneBeenCelebrated(pubkey, m),
+    });
+    if (next === null) return;
 
-    const highest = pending[pending.length - 1];
-    // Mark immediately (sharing is opt-in; closing without sharing keeps it
-    // celebrated) so the effect can't re-fire on later renders.
-    markMilestonesCelebratedUpTo(pubkey, highest);
-    setMilestone(highest);
+    // Day-1 (foundation) is derived from data and never stored — only the
+    // streak milestones (7+) are marked. Marking is immediate (sharing is
+    // opt-in; closing without sharing keeps it celebrated) so the effect can't
+    // re-fire on later renders.
+    if (next > 1) markMilestonesCelebratedUpTo(pubkey, next);
+    setMilestone(next);
   }, [pubkey, isLoading, total, current]);
 
   const copy = milestone !== null ? MILESTONE_COPY[milestone] : null;
