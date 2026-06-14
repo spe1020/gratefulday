@@ -13,6 +13,22 @@
       padding-right: 2rem; /* 32px */
     }
   }
+
+  /* Gentle, restrained twinkle for galaxy stars — no physics, no heavy loop. */
+  @keyframes galaxyTwinkle {
+    0%, 100% { opacity: 0.65; }
+    50% { opacity: 1; }
+  }
+
+  .galaxy-glow {
+    animation: galaxyTwinkle 4s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .galaxy-glow {
+      animation: none;
+    }
+  }
 }
 
 @layer base {
