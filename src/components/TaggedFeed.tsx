@@ -3,9 +3,9 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Hash, RefreshCw, Sparkles } from 'lucide-react';
-import type { NostrEvent } from '@nostrify/nostrify';
 import { useTaggedGratitude, type TaggedFilter } from '@/hooks/useTaggedGratitude';
 import { TaggedNoteCard } from '@/components/TaggedNoteCard';
+import { filterTaggedNotes } from '@/lib/taggedFeedUtils';
 import { cn } from '@/lib/utils';
 
 const FILTERS: { value: TaggedFilter; label: string }[] = [
@@ -27,19 +27,13 @@ export function TaggedFeed() {
     isFetchingNextPage,
   } = useTaggedGratitude(filter);
 
-  // Flatten pages and dedup by id (relays can resend across page boundaries).
-  const notes = useMemo(() => {
-    const seen = new Set<string>();
-    const flat: NostrEvent[] = [];
-    for (const page of data?.pages ?? []) {
-      for (const event of page) {
-        if (seen.has(event.id)) continue;
-        seen.add(event.id);
-        flat.push(event);
-      }
-    }
-    return flat;
-  }, [data]);
+  // Flatten pages, then filter + dedup. The feed surfaces arbitrary public
+  // notes, so filterTaggedNotes drops replies, empty notes, and spam (and
+  // collapses relay resends across page boundaries).
+  const notes = useMemo(
+    () => filterTaggedNotes((data?.pages ?? []).flat()),
+    [data]
+  );
 
   return (
     <div className="space-y-6">
