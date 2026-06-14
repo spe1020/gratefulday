@@ -82,27 +82,61 @@ export function useGratitudeEntry(pubkey: string | undefined, dateString: string
   });
 }
 
+/** Options for {@link useCommunityGratitude}. */
+export interface CommunityGratitudeOptions {
+  /** Max visible entries after filtering/dedup. */
+  limit?: number;
+  /** Fetch-only lower bound on `created_at` (unix seconds). Never used for day attribution. */
+  since?: number;
+  /** Fetch-only upper bound on `created_at` (unix seconds). Never used for day attribution. */
+  until?: number;
+}
+
 /**
- * Hook to fetch recent community gratitude entries
+ * Hook to fetch recent community gratitude entries.
+ *
+ * Accepts either a bare `limit` (the feed's original call) or an options object
+ * for wider, time-bounded windows (calendar/galaxy). `since`/`until` are FETCH
+ * hints only — they bound `created_at`, never which day an entry belongs to
+ * (that is always the `d` tag, applied downstream by consumers).
+ *
+ * The feed path (`useCommunityGratitude(20)`) produces a byte-identical query
+ * filter and React Query key to preserve its cache and behavior.
  */
-export function useCommunityGratitude(limit: number = 20) {
+export function useCommunityGratitude(
+  options: number | CommunityGratitudeOptions = 20
+) {
   const { nostr } = useNostr();
 
+  const { limit = 20, since, until } =
+    typeof options === 'number' ? { limit: options } : options;
+
+  // Keep the feed's key exactly `['community-gratitude', limit]`; only widen it
+  // when bounds are present so bounded windows don't collide with the feed cache.
+  const queryKey =
+    since === undefined && until === undefined
+      ? ['community-gratitude', limit]
+      : ['community-gratitude', limit, since ?? null, until ?? null];
+
   return useQuery({
-    queryKey: ['community-gratitude', limit],
+    queryKey,
     queryFn: async (c) => {
       const signal = AbortSignal.any([c.signal, AbortSignal.timeout(3000)]);
-      const events = await nostr.query(
-        [
-          {
-            kinds: [36669],
-            // Over-fetch: validation, encrypted-entry exclusion, and dedup
-            // below shrink the result, and the feed should stay full.
-            limit: limit * 2,
-          },
-        ],
-        { signal }
-      );
+      const filter: {
+        kinds: number[];
+        limit: number;
+        since?: number;
+        until?: number;
+      } = {
+        kinds: [36669],
+        // Over-fetch: validation, encrypted-entry exclusion, and dedup
+        // below shrink the result, and the feed should stay full.
+        limit: limit * 2,
+      };
+      if (since !== undefined) filter.since = since;
+      if (until !== undefined) filter.until = until;
+
+      const events = await nostr.query([filter], { signal });
 
       // Encrypted entries are personal — their ciphertext must never render
       // in the community feed.
