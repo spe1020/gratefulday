@@ -29,8 +29,10 @@ export function GratitudeNoteCard({ event }: GratitudeNoteCardProps) {
   const dayTag = event.tags.find(([name]) => name === 'day')?.[1];
   const dateTag = event.tags.find(([name]) => name === 'd')?.[1];
 
+  // The `d` tag is a local-tz date string; parse at local midnight so negative
+  // timezones don't render the previous day (bare `new Date('YYYY-MM-DD')` is UTC).
   const formattedDate = dateTag
-    ? new Date(dateTag).toLocaleDateString('en-US', {
+    ? new Date(`${dateTag}T00:00:00`).toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
       })

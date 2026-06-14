@@ -249,7 +249,14 @@ export function GratitudeGalaxy() {
                   <g
                     key={node.key}
                     onClick={() => setSelected(node)}
-                    className="cursor-pointer"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setSelected(node);
+                      }
+                    }}
+                    tabIndex={0}
+                    className="cursor-pointer focus:outline-none focus-visible:outline-2 focus-visible:outline-amber-500"
                     role="button"
                     aria-label={`${node.events.length} reflection${
                       node.events.length === 1 ? '' : 's'
