@@ -16,6 +16,17 @@ import { GratitudeHeatmap } from './GratitudeHeatmap';
 
 const TODAY = new Date(2026, 5, 13); // 2026-06-13 (local)
 
+// Mirror the component's title formatting so the assertion can't drift with
+// the CI locale/timezone.
+function cellLabel(date: Date, state: 'reflected' | 'no entry'): string {
+  const formatted = date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+  return `${formatted} — ${state}`;
+}
+
 function entry(dateString: string): NostrEvent {
   return {
     id: `evt-${dateString}`,
@@ -46,12 +57,17 @@ describe('GratitudeHeatmap', () => {
 
     render(<GratitudeHeatmap today={TODAY} />);
 
-    const filled = screen.getAllByTitle(/— reflected$/i);
+    const filled = screen.getAllByTitle(/— reflected$/);
     expect(filled).toHaveLength(3);
-    // Today's entry is present and labelled.
-    expect(screen.getByTitle(/Jun 13, 2026 — reflected/i)).toBeInTheDocument();
+    // Today's entry is present and labelled (label computed via the same
+    // toLocaleDateString options the component uses).
+    expect(
+      screen.getByTitle(cellLabel(new Date(2026, 5, 13), 'reflected'))
+    ).toBeInTheDocument();
     // A day without an entry reads as "no entry", never decrypted content.
-    expect(screen.getByTitle(/Jun 12, 2026 — no entry/i)).toBeInTheDocument();
+    expect(
+      screen.getByTitle(cellLabel(new Date(2026, 5, 12), 'no entry'))
+    ).toBeInTheDocument();
   });
 
   it('dedupes multiple events for the same day into a single filled cell', () => {

@@ -113,7 +113,12 @@ export function MilestoneCelebrationDialog() {
       },
       {
         onSuccess: () => {
-          toast({ title: 'Shared to Nostr', description: 'Your milestone is out in the world. 🔥' });
+          toast({
+            title: 'Shared to Nostr',
+            description: isFoundation
+              ? 'Your gratitude practice is off to the world. 🌱'
+              : 'Your milestone is out in the world. 🔥',
+          });
           setMilestone(null);
         },
         onError: () => {

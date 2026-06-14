@@ -18,9 +18,13 @@ function nextCelebration(pubkey: string, current: number): number | null {
   return pending.length > 0 ? pending[pending.length - 1] : null;
 }
 
+// The single namespaced key milestoneStore writes under — clear only this one
+// so the test stays isolated without disturbing unrelated localStorage state.
+const MILESTONE_STORAGE_KEY = 'gratefulday:milestones:v1';
+
 describe('day-1 foundation milestone firing', () => {
   beforeEach(() => {
-    localStorage.clear();
+    localStorage.removeItem(MILESTONE_STORAGE_KEY);
   });
 
   it('fires the foundation (1) on a fresh account’s first entry', () => {
