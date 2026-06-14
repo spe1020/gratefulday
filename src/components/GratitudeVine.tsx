@@ -97,10 +97,20 @@ export function GratitudeVine({ today }: GratitudeVineProps) {
     new Date(now.getFullYear(), now.getMonth(), now.getDate())
   );
 
-  const { buckets, ticks, count } = useMemo(() => {
+  const { buckets, ticks, count, hasEntries } = useMemo(() => {
     const dates = getEntryDateStrings(entries ?? []);
     const wk = getWeeklyBuckets(dates, now, WEEKS);
-    return { buckets: wk, ticks: monthTicks(wk), count: dates.size };
+    // Count the days shown in the year-view window (sum of per-week buckets),
+    // not dates.size — useGratitudeEntries over-fetches (limit 500), so older
+    // out-of-window entries would otherwise inflate the "over the past year"
+    // total. Buckets are de-duped per local day, so the sum is unique days.
+    const windowCount = wk.reduce((sum, b) => sum + b.count, 0);
+    return {
+      buckets: wk,
+      ticks: monthTicks(wk),
+      count: windowCount,
+      hasEntries: dates.size > 0,
+    };
     // nowKey pins the memo to the local day, not every render's clock read.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries, nowKey]);
@@ -115,8 +125,9 @@ export function GratitudeVine({ today }: GratitudeVineProps) {
   }, [buckets]);
 
   // Mirror StreakBadge: self-hide while logged out, loading, or before any
-  // entry exists — so there's no empty layout shift.
-  if (!user || isLoading || count === 0) {
+  // entry exists — so there's no empty layout shift. (Self-hide tracks any
+  // entry, not just in-window ones, to preserve the original behavior.)
+  if (!user || isLoading || !hasEntries) {
     return null;
   }
 

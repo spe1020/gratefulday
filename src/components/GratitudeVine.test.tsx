@@ -16,6 +16,15 @@ import { GratitudeVine } from './GratitudeVine';
 
 const TODAY = new Date(2026, 5, 13); // Sat 2026-06-13
 
+/** Mirror the component's locale formatting so assertions aren't en-only. */
+function weekTitle(year: number, month: number, day: number, count: number): string {
+  const label = new Date(year, month - 1, day).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+  return `Week of ${label} — ${count} ${count === 1 ? 'day' : 'days'}`;
+}
+
 function entry(dateString: string): NostrEvent {
   return {
     id: `evt-${dateString}`,
@@ -78,7 +87,9 @@ describe('GratitudeVine', () => {
     mockEntries.mockReturnValue({ data: fullWeek, isLoading: false });
 
     render(<GratitudeVine today={TODAY} />);
-    expect(screen.getByText('Week of May 31 — 7 days')).toBeInTheDocument();
+    expect(
+      screen.getByText(weekTitle(2026, 5, 31, 7))
+    ).toBeInTheDocument();
   });
 
   it('draws one leaflet per journaled day and no bloom below a full week', () => {
