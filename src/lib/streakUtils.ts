@@ -18,7 +18,10 @@ export interface StreakResult {
   todayCompleted: boolean;
 }
 
-export const MILESTONES = [7, 14, 30, 50, 100, 200, 365] as const;
+// `1` is the day-1 "foundation" celebration (first entry), not a streak
+// trophy — the dialog renders it with distinct copy/visuals. The hint logic
+// stays gated at `current >= 3`, so day 1 never produces a "days to next" nudge.
+export const MILESTONES = [1, 7, 14, 30, 50, 100, 200, 365] as const;
 
 export type Milestone = (typeof MILESTONES)[number];
 
