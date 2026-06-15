@@ -57,13 +57,27 @@ export function Logo({ className, showText = true, size = 'md' }: LogoProps) {
   }
 
   return (
-    <Link to="/?tab=calendar" className={cn('flex items-center', className)}>
+    <Link
+      to="/?tab=calendar"
+      className={cn(
+        'flex items-center',
+        // The header logo is intentionally taller than the header bar. Pin the
+        // clickable box to the header height and re-enable pointer events here
+        // (the brand wrapper disables them) so the part of the logo that spills
+        // below the header can't steal clicks from the content beneath it.
+        size === 'header' && 'h-[88px] sm:h-[96px] md:h-[104px] pointer-events-auto',
+        className
+      )}
+    >
       <img
         src={logoPaths[currentPathIndex]}
         alt="GratefulDay"
         className={cn(
           'w-auto object-contain',
-          sizeClasses[size]
+          sizeClasses[size],
+          // The overflowing image must never intercept clicks meant for the
+          // content below the header (e.g. the community sub-tabs).
+          size === 'header' && 'pointer-events-none'
         )}
         onError={handleImageError}
       />
