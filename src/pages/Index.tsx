@@ -3,6 +3,7 @@ import { useSearchParams, Link } from 'react-router-dom';
 import { useHead } from '@unhead/react';
 import { CalendarView } from '@/components/CalendarView';
 import { CommunitySection } from '@/components/CommunitySection';
+import { NotificationBell } from '@/components/NotificationBell';
 import { LoginArea } from '@/components/auth/LoginArea';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -201,6 +202,7 @@ export default function Index() {
                     </SheetContent>
                   </Sheet>
                 )}
+                <NotificationBell />
                 <LoginArea className="max-w-48 sm:max-w-60" />
               </div>
             </div>
