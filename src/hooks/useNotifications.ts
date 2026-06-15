@@ -58,7 +58,9 @@ export function useNotifications() {
 
   const coordsArr = useMemo(() => [...coords], [coords]);
   const noteIdsArr = useMemo(() => [...noteIds], [noteIds]);
-  const ready = !!pubkey && (coordsArr.length > 0 || noteIdsArr.length > 0);
+  // The zap filter (#p = me) runs for any logged-in user, even one with no
+  // gathered notes yet — so readiness only needs a pubkey.
+  const ready = !!pubkey;
 
   const {
     data: events,
@@ -73,18 +75,23 @@ export function useNotifications() {
     queryFn: async (c) => {
       const signal = AbortSignal.any([c.signal, AbortSignal.timeout(5000)]);
       const since = Math.floor(Date.now() / 1000) - WINDOW_DAYS * 86400;
-      const filters: NostrFilter[] = [];
+      const filters: NostrFilter[] = [
+        // Zaps are scoped by recipient (#p = me), NOT by my gathered notes, so a
+        // zap is never missed because its note aged out of the content window —
+        // completeness matters most for zaps. Reactions/comments/replies stay
+        // content-scoped (membership in my notes is how we know they're mine).
+        { kinds: [9735], '#p': [pubkey!], since, limit: PER_FILTER_LIMIT },
+      ];
       if (noteIdsArr.length) {
-        // reactions + replies + zaps on my kind-1 notes
-        filters.push({ kinds: [7, 1, 9735], '#e': noteIdsArr, since, limit: PER_FILTER_LIMIT });
+        // reactions + replies on my kind-1 notes
+        filters.push({ kinds: [7, 1], '#e': noteIdsArr, since, limit: PER_FILTER_LIMIT });
       }
       if (coordsArr.length) {
-        // reactions + zaps on my 36669 entries
-        filters.push({ kinds: [7, 9735], '#a': coordsArr, since, limit: PER_FILTER_LIMIT });
+        // reactions on my 36669 entries
+        filters.push({ kinds: [7], '#a': coordsArr, since, limit: PER_FILTER_LIMIT });
         // NIP-22 comments rooted on my 36669 entries
         filters.push({ kinds: [1111], '#A': coordsArr, since, limit: PER_FILTER_LIMIT });
       }
-      if (!filters.length) return [];
       return nostr.query(filters, { signal });
     },
   });

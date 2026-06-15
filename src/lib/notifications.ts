@@ -29,7 +29,13 @@ export interface NotificationItem {
   /** Pubkey of whoever interacted (for zaps: the zap-request author, not the receipt). */
   actor: string;
   createdAt: number;
-  target: NotificationTarget;
+  /**
+   * Which of the user's notes was interacted with. Always present for
+   * reaction/comment/reply; OPTIONAL for zaps — a zap that names the user as
+   * recipient (`#p`) but carries no note reference is a profile zap (still
+   * notified, just no note to open).
+   */
+  target?: NotificationTarget;
   /** Reaction emoji (reaction only). */
   emoji?: string;
   /** Zap amount in sats (zap only). */
@@ -96,8 +102,12 @@ export function extractZapAmount(receipt: NostrEvent): number | null {
   return null;
 }
 
-/** Resolve which of the user's notes an event references (by `#a`/`#A` coord or `#e` id). */
-function resolveTarget(event: NostrEvent, content: NotifiableContent): NotificationTarget | null {
+/**
+ * STRICT target for reactions/comments/replies: the referenced `#a`/`#A` coord
+ * or `#e` id must be one of the user's GATHERED notes — that membership is how
+ * we know the interaction is on the user's content.
+ */
+function contentTarget(event: NostrEvent, content: NotifiableContent): NotificationTarget | null {
   const coord =
     firstTagValue(event, 'a', content.coords) ?? firstTagValue(event, 'A', content.coords);
   if (coord) return { kind: 36669, ref: coord };
@@ -107,38 +117,63 @@ function resolveTarget(event: NostrEvent, content: NotifiableContent): Notificat
 }
 
 /**
+ * Target for a zap. A 9735 that `#p`-tags the user is a zap TO the user, so the
+ * note it references is theirs by definition — we trust the receipt's `#a`/`#e`
+ * regardless of whether it's in the gathered window (a zap must never be missed
+ * just because the note aged out of the bounded content set). No reference → a
+ * profile zap (undefined target).
+ */
+function zapTarget(event: NostrEvent): NotificationTarget | undefined {
+  const coord = event.tags.find(([name]) => name === 'a')?.[1];
+  if (coord) return { kind: 36669, ref: coord };
+  const noteId = event.tags.find(([name]) => name === 'e')?.[1];
+  if (noteId) return { kind: 1, ref: noteId };
+  return undefined;
+}
+
+/**
  * Map one interaction event → a notification item, or null if it doesn't apply
- * (doesn't reference the user's content, or is the user's own interaction).
+ * (not on the user's content, or the user's own interaction).
  */
 export function mapEventToNotification(
   event: NostrEvent,
   content: NotifiableContent
 ): NotificationItem | null {
-  const target = resolveTarget(event, content);
-  if (!target) return null;
-
-  const base = { id: event.id, createdAt: event.created_at, target };
+  const base = { id: event.id, createdAt: event.created_at };
 
   switch (event.kind) {
     case 7: {
-      if (event.pubkey === content.pubkey) return null; // self-reaction
-      return { ...base, type: 'reaction', actor: event.pubkey, emoji: event.content.trim() };
+      const target = contentTarget(event, content);
+      if (!target || event.pubkey === content.pubkey) return null; // not mine / self
+      return { ...base, type: 'reaction', actor: event.pubkey, target, emoji: event.content.trim() };
     }
     case 9735: {
+      // Scoped by #p = the user (zaps name their recipient), so completeness for
+      // zaps doesn't depend on the gathered content window.
+      const recipient = event.tags.find(([name]) => name === 'p')?.[1];
+      if (recipient !== content.pubkey) return null; // not a zap to me
       const actor = extractZapActor(event);
       if (!actor || actor === content.pubkey) return null; // unknown or self-zap
-      return { ...base, type: 'zap', actor, amountSats: extractZapAmount(event) ?? undefined };
+      return {
+        ...base,
+        type: 'zap',
+        actor,
+        target: zapTarget(event),
+        amountSats: extractZapAmount(event) ?? undefined,
+      };
     }
     case 1111: {
-      if (event.pubkey === content.pubkey) return null; // self-comment
-      return { ...base, type: 'comment', actor: event.pubkey, snippet: event.content };
+      const target = contentTarget(event, content);
+      if (!target || event.pubkey === content.pubkey) return null; // not mine / self
+      return { ...base, type: 'comment', actor: event.pubkey, target, snippet: event.content };
     }
     case 1: {
       // A kind-1 referencing my note is a reply only if it's a real NIP-10 reply
       // (not a mention/quote), and not my own.
-      if (event.pubkey === content.pubkey) return null;
-      if (target.kind !== 1 || !isNip10Reply(event, target.ref)) return null;
-      return { ...base, type: 'reply', actor: event.pubkey, snippet: event.content };
+      const target = contentTarget(event, content);
+      if (!target || target.kind !== 1 || event.pubkey === content.pubkey) return null;
+      if (!isNip10Reply(event, target.ref)) return null;
+      return { ...base, type: 'reply', actor: event.pubkey, target, snippet: event.content };
     }
     default:
       return null;
@@ -170,7 +205,8 @@ export function unreadCount(items: NotificationItem[], lastSeen: number | undefi
 export interface NotificationGroup {
   key: string;
   type: NotificationType;
-  target: NotificationTarget;
+  /** Undefined for a profile-zap group (no note). */
+  target?: NotificationTarget;
   /** Members, newest-first. Reactions/zaps on one target collapse here; comments/replies are singletons. */
   items: NotificationItem[];
   /** Distinct actor pubkeys, newest-first by their interaction. */
@@ -189,7 +225,8 @@ export function groupNotifications(items: NotificationItem[]): NotificationGroup
 
   for (const item of items) {
     const collapsible = item.type === 'reaction' || item.type === 'zap';
-    const key = collapsible ? `${item.type}:${item.target.ref}` : item.id;
+    // Profile zaps (no target) collapse together under a "profile" bucket.
+    const key = collapsible ? `${item.type}:${item.target?.ref ?? 'profile'}` : item.id;
 
     const existing = groups.get(key);
     if (existing) {

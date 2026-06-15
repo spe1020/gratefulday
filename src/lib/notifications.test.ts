@@ -33,8 +33,13 @@ function evt(over: Partial<NostrEvent>): NostrEvent {
   };
 }
 
-/** A 9735 receipt with a 9734 zap request embedded in `description`. */
-function zapReceipt(over: { actor?: string; amountMsat?: number; tags?: string[][] } = {}): NostrEvent {
+/**
+ * A 9735 receipt with a 9734 zap request embedded in `description`. Defaults to
+ * `#p` = ME (the recipient) since notifications scope zaps by recipient.
+ */
+function zapReceipt(
+  over: { actor?: string; amountMsat?: number; recipient?: string; tags?: string[][] } = {}
+): NostrEvent {
   const request = {
     kind: 9734,
     pubkey: over.actor ?? 'zapper',
@@ -44,7 +49,11 @@ function zapReceipt(over: { actor?: string; amountMsat?: number; tags?: string[]
     id: 'zap-id',
     kind: 9735,
     pubkey: 'lnurl-server', // receipts are authored by the server, NOT the zapper
-    tags: [...(over.tags ?? []), ['description', JSON.stringify(request)]],
+    tags: [
+      ['p', over.recipient ?? ME],
+      ...(over.tags ?? []),
+      ['description', JSON.stringify(request)],
+    ],
   });
 }
 
@@ -94,6 +103,27 @@ describe('mapEventToNotification', () => {
       content
     );
     expect(item).toMatchObject({ type: 'zap', actor: 'zapper', amountSats: 21, target: { kind: 1, ref: NOTE_ID } });
+  });
+
+  it('maps a zap to a note OUTSIDE the gathered window (completeness — scoped by #p, not content)', () => {
+    // The zapped note isn't in my gathered set, but #p=ME proves it's mine.
+    const item = mapEventToNotification(
+      zapReceipt({ actor: 'zapper', tags: [['e', 'aged-out-note']] }),
+      content
+    );
+    expect(item).toMatchObject({ type: 'zap', target: { kind: 1, ref: 'aged-out-note' } });
+  });
+
+  it('maps a profile zap (no note reference) with an undefined target', () => {
+    const item = mapEventToNotification(zapReceipt({ actor: 'zapper' }), content);
+    expect(item).toMatchObject({ type: 'zap', actor: 'zapper' });
+    expect(item?.target).toBeUndefined();
+  });
+
+  it('ignores a zap whose recipient (#p) is not me', () => {
+    expect(
+      mapEventToNotification(zapReceipt({ actor: 'zapper', recipient: 'someone-else' }), content)
+    ).toBeNull();
   });
 
   it('maps a NIP-22 comment on my entry', () => {
