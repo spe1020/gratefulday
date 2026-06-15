@@ -17,11 +17,11 @@ interface ReactionBarProps {
  */
 export function ReactionBar({ target, className }: ReactionBarProps) {
   const { user } = useCurrentUser();
-  const { counts, own, react } = useReactions(target);
+  const { counts, otherCount, own, react } = useReactions(target);
 
   return (
-    <div className={cn('flex items-center gap-1', className)}>
-      {CURATED_REACTIONS.map((emoji) => {
+    <div className={cn('flex flex-wrap items-center gap-1', className)}>
+      {CURATED_REACTIONS.map(({ emoji, label }) => {
         const count = counts[emoji] ?? 0;
         const reacted = own[emoji];
         return (
@@ -31,8 +31,8 @@ export function ReactionBar({ target, className }: ReactionBarProps) {
             onClick={() => react(emoji)}
             disabled={!user}
             aria-pressed={reacted}
-            aria-label={`React ${emoji}${count > 0 ? ` (${count})` : ''}`}
-            title={user ? `React ${emoji}` : 'Log in to react'}
+            aria-label={`${label}${count > 0 ? ` (${count})` : ''}`}
+            title={user ? label : 'Log in to react'}
             className={cn(
               'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-sm transition-colors',
               'disabled:cursor-default disabled:opacity-60',
@@ -55,6 +55,14 @@ export function ReactionBar({ target, className }: ReactionBarProps) {
           </button>
         );
       })}
+      {otherCount > 0 && (
+        <span
+          className="text-xs text-muted-foreground tabular-nums px-1"
+          title={`${otherCount} more reaction${otherCount === 1 ? '' : 's'} from across Nostr`}
+        >
+          +{otherCount}
+        </span>
+      )}
     </div>
   );
 }

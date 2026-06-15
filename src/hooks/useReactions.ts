@@ -7,7 +7,7 @@ import type { NostrEvent, NostrFilter } from '@nostrify/nostrify';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import {
-  CURATED_REACTIONS,
+  CURATED_EMOJIS,
   addressableCoordinate,
   aggregateReactions,
   buildReactionTags,
@@ -18,6 +18,8 @@ import {
 export interface UseReactionsResult {
   /** Per-curated-emoji counts (distinct reactors). */
   counts: Record<string, number>;
+  /** Distinct reactors outside the curated set (wider-network rollup, display-only). */
+  otherCount: number;
   /** Whether the current user has reacted with each curated emoji. */
   own: Record<string, boolean>;
   /** Toggle the user's reaction for an emoji (react, or NIP-09 delete to un-react). */
@@ -57,11 +59,11 @@ export function useReactions(target: NostrEvent): UseReactionsResult {
     },
   });
 
-  const counts = useMemo(() => aggregateReactions(events ?? []), [events]);
+  const { counts, otherCount } = useMemo(() => aggregateReactions(events ?? []), [events]);
 
   const own = useMemo(() => {
     const map: Record<string, boolean> = {};
-    for (const emoji of CURATED_REACTIONS) {
+    for (const emoji of CURATED_EMOJIS) {
       map[emoji] = user ? !!findOwnReaction(events ?? [], user.pubkey, emoji) : false;
     }
     return map;
@@ -69,7 +71,8 @@ export function useReactions(target: NostrEvent): UseReactionsResult {
 
   const react = useCallback(
     (emoji: string) => {
-      if (!user) return;
+      // Send path is curated-only — you can only toggle what the bar can send.
+      if (!user || !CURATED_EMOJIS.includes(emoji)) return;
 
       const current = events ?? [];
       const mine = findOwnReaction(current, user.pubkey, emoji);
@@ -110,5 +113,5 @@ export function useReactions(target: NostrEvent): UseReactionsResult {
     [user, events, queryClient, queryKey, target, publish]
   );
 
-  return { counts, own, react, isLoading };
+  return { counts, otherCount, own, react, isLoading };
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { NostrEvent } from '@nostrify/nostrify';
 import {
+  CURATED_EMOJIS,
   CURATED_REACTIONS,
   aggregateReactions,
   buildReactionTags,
@@ -62,30 +63,62 @@ describe('buildReactionTags — kind-routed', () => {
   });
 });
 
+describe('CURATED_REACTIONS (single source of truth)', () => {
+  it('is exactly the five expected emoji, in order', () => {
+    expect(CURATED_REACTIONS.map((r) => r.emoji)).toEqual(['🙏', '🌱', '✨', '🫂', '❤️']);
+    expect(CURATED_EMOJIS).toEqual(['🙏', '🌱', '✨', '🫂', '❤️']);
+  });
+});
+
 describe('aggregateReactions', () => {
-  it('counts distinct pubkeys per curated emoji, ignoring non-curated content', () => {
+  it('counts distinct curated reactors AND rolls up non-curated into otherCount', () => {
     const events = [
       reaction('a', '🙏'),
       reaction('b', '🙏'),
       reaction('a', '🙏'), // same pubkey+emoji — counts once
       reaction('c', '✨'),
-      reaction('d', '+'), // non-curated — ignored
-      reaction('e', '🔥'), // non-curated — ignored
+      reaction('d', '👍'), // non-curated → others
+      reaction('e', '😂'), // non-curated → others
     ];
-    const counts = aggregateReactions(events);
+    const { counts, otherCount } = aggregateReactions(events);
     expect(counts['🙏']).toBe(2);
     expect(counts['✨']).toBe(1);
     expect(counts['🌱']).toBe(0);
+    expect(otherCount).toBe(2); // d, e — the wider-network rollup
   });
 
-  it('returns a zeroed entry for every curated emoji', () => {
-    const counts = aggregateReactions([]);
-    expect(Object.keys(counts).sort()).toEqual([...CURATED_REACTIONS].sort());
+  it('surfaces a note that looks unreacted but carries only network reactions', () => {
+    const { counts, otherCount } = aggregateReactions([reaction('a', '👍'), reaction('b', '🤙')]);
+    expect(Object.values(counts).every((n) => n === 0)).toBe(true);
+    expect(otherCount).toBe(2);
+  });
+
+  it('dedups distinct reactors within the others bucket', () => {
+    // Same pubkey, two different non-curated emoji — one distinct reactor.
+    const { otherCount } = aggregateReactions([reaction('x', '👍'), reaction('x', '😂')]);
+    expect(otherCount).toBe(1);
+  });
+
+  it('folds +/empty into others, ignores - (dislike), normalizes ❤ vs ❤️', () => {
+    const { counts, otherCount } = aggregateReactions([
+      reaction('a', '+'), // generic like → others, NOT recolored to ❤️
+      reaction('b', ''), // empty like → others
+      reaction('c', '-'), // dislike → ignored entirely
+      reaction('d', '❤'), // bare heart → curated ❤️ via normalization
+      reaction('e', '❤️'), // heart with variation selector → curated ❤️
+    ]);
+    expect(counts['❤️']).toBe(2); // d + e
+    expect(otherCount).toBe(2); // a + b (c ignored)
+  });
+
+  it('returns a zeroed entry for every curated emoji, in order', () => {
+    const { counts } = aggregateReactions([]);
+    expect(Object.keys(counts)).toEqual([...CURATED_EMOJIS]);
     expect(Object.values(counts).every((n) => n === 0)).toBe(true);
   });
 
   it('trims whitespace around the reaction content', () => {
-    expect(aggregateReactions([reaction('a', ' 🙏 ')])['🙏']).toBe(1);
+    expect(aggregateReactions([reaction('a', ' 🙏 ')]).counts['🙏']).toBe(1);
   });
 });
 
