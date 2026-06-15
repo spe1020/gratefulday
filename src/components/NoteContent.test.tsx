@@ -1,8 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { TestApp } from '@/test/TestApp';
 import { NoteContent } from './NoteContent';
 import type { NostrEvent } from '@nostrify/nostrify';
+
+function noteWith(content: string): NostrEvent {
+  return {
+    id: 'test-id',
+    pubkey: 'test-pubkey',
+    created_at: 1000,
+    kind: 1,
+    tags: [],
+    content,
+    sig: 'test-sig',
+  };
+}
 
 describe('NoteContent', () => {
   it('linkifies URLs in kind 1 events', () => {
@@ -100,6 +112,77 @@ describe('NoteContent', () => {
     expect(bitcoinHashtag).toBeInTheDocument();
     expect(nostrHashtag).toHaveAttribute('href', '/t/nostr');
     expect(bitcoinHashtag).toHaveAttribute('href', '/t/bitcoin');
+  });
+
+  it('renders an image URL as an inline lazy <img>', () => {
+    const { container } = render(
+      <TestApp>
+        <NoteContent event={noteWith('look https://host.example/pic.png')} />
+      </TestApp>
+    );
+    const img = container.querySelector('img');
+    expect(img).toBeInTheDocument();
+    expect(img).toHaveAttribute('src', 'https://host.example/pic.png');
+    expect(img).toHaveAttribute('loading', 'lazy');
+  });
+
+  it('renders a Blossom .mp4 as an inline <video preload="none">, not a link', () => {
+    const { container } = render(
+      <TestApp>
+        <NoteContent event={noteWith('clip https://blossom.primal.net/abc123.mp4')} />
+      </TestApp>
+    );
+    const video = container.querySelector('video');
+    expect(video).toBeInTheDocument();
+    expect(video).toHaveAttribute('preload', 'none');
+    expect(video).toHaveAttribute('src', 'https://blossom.primal.net/abc123.mp4');
+    expect(screen.queryByRole('link', { name: /blossom/ })).not.toBeInTheDocument();
+  });
+
+  it('renders an audio URL as an inline <audio> player', () => {
+    const { container } = render(
+      <TestApp>
+        <NoteContent event={noteWith('https://host.example/song.mp3')} />
+      </TestApp>
+    );
+    const audio = container.querySelector('audio');
+    expect(audio).toBeInTheDocument();
+    expect(audio).toHaveAttribute('preload', 'none');
+  });
+
+  it('keeps a normal (non-media) webpage link as a link', () => {
+    render(
+      <TestApp>
+        <NoteContent event={noteWith('read https://example.com/article')} />
+      </TestApp>
+    );
+    expect(
+      screen.getByRole('link', { name: 'https://example.com/article' })
+    ).toBeInTheDocument();
+    expect(document.querySelector('img,video,audio')).not.toBeInTheDocument();
+  });
+
+  it('trims trailing punctuation off a media URL (src and surrounding text both clean)', () => {
+    const { container } = render(
+      <TestApp>
+        <NoteContent event={noteWith('see https://host.example/pic.png.')} />
+      </TestApp>
+    );
+    expect(container.querySelector('img')).toHaveAttribute('src', 'https://host.example/pic.png');
+    expect(container.textContent).toContain('.'); // the trailing period is re-emitted as text
+  });
+
+  it('falls back to a link when media fails to load', () => {
+    const { container } = render(
+      <TestApp>
+        <NoteContent event={noteWith('https://host.example/broken.png')} />
+      </TestApp>
+    );
+    fireEvent.error(container.querySelector('img')!);
+    expect(
+      screen.getByRole('link', { name: 'https://host.example/broken.png' })
+    ).toBeInTheDocument();
+    expect(container.querySelector('img')).not.toBeInTheDocument();
   });
 
   it('generates deterministic names for users without metadata and styles them differently', () => {

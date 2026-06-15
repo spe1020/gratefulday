@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { type NostrEvent } from '@nostrify/nostrify';
 import { Link } from 'react-router-dom';
 import { nip19 } from 'nostr-tools';
 import { useAuthor } from '@/hooks/useAuthor';
 import { genUserName } from '@/lib/genUserName';
+import { detectMediaType, splitTrailingPunctuation, type MediaType } from '@/lib/mediaUtils';
 import { cn } from '@/lib/utils';
 
 interface NoteContentProps {
@@ -40,18 +41,28 @@ export function NoteContent({
       }
 
       if (url) {
-        // Handle URLs
-        parts.push(
-          <a
-            key={`url-${keyCounter++}`}
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-500 hover:underline"
-          >
-            {url}
-          </a>
-        );
+        // Trim trailing sentence punctuation the greedy URL match over-captures,
+        // and use that single cleaned URL for BOTH media src and link href.
+        const { url: cleanUrl, trailing } = splitTrailingPunctuation(url);
+        const mediaType = detectMediaType(cleanUrl);
+
+        if (mediaType) {
+          parts.push(<InlineMedia key={`media-${keyCounter++}`} url={cleanUrl} type={mediaType} />);
+        } else {
+          parts.push(
+            <a
+              key={`url-${keyCounter++}`}
+              href={cleanUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-500 hover:underline"
+            >
+              {cleanUrl}
+            </a>
+          );
+        }
+        // Re-emit the trimmed punctuation so the text reads faithfully.
+        if (trailing) parts.push(trailing);
       } else if (nostrId) {
         // Handle Nostr references
         try {
@@ -112,6 +123,68 @@ export function NoteContent({
     <div className={cn("whitespace-pre-wrap break-words", className)}>
       {content.length > 0 ? content : event.content}
     </div>
+  );
+}
+
+/**
+ * Inline media for a bare media URL. Lazy / preload="none" so nothing downloads
+ * until an image scrolls in or the viewer presses play — important in an open
+ * feed where a note may carry several media links. On load error (404, or a URL
+ * that isn't really media) it degrades to the original URL as a link.
+ *
+ * Privacy: loading remote media leaks the viewer's IP to the host. Accepted for
+ * v1; a future "load media" setting could gate this.
+ */
+function InlineMedia({ url, type }: { url: string; type: MediaType }) {
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-blue-500 hover:underline"
+      >
+        {url}
+      </a>
+    );
+  }
+
+  if (type === 'image') {
+    return (
+      <a href={url} target="_blank" rel="noopener noreferrer" className="block my-2">
+        <img
+          src={url}
+          alt=""
+          loading="lazy"
+          onError={() => setFailed(true)}
+          className="max-h-80 w-auto max-w-full rounded-lg border border-border object-contain"
+        />
+      </a>
+    );
+  }
+
+  if (type === 'video') {
+    return (
+      <video
+        src={url}
+        controls
+        preload="none"
+        onError={() => setFailed(true)}
+        className="block my-2 max-h-80 w-full max-w-full rounded-lg border border-border"
+      />
+    );
+  }
+
+  return (
+    <audio
+      src={url}
+      controls
+      preload="none"
+      onError={() => setFailed(true)}
+      className="block my-2 w-full max-w-full"
+    />
   );
 }
 
