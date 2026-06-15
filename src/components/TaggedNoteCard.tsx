@@ -15,6 +15,8 @@ import { useToast } from '@/hooks/useToast';
 import { genUserName } from '@/lib/genUserName';
 import type { NostrEvent, NostrMetadata } from '@nostrify/nostrify';
 import { NoteContent } from '@/components/NoteContent';
+import { ReactionBar } from '@/components/ReactionBar';
+import { ZapButton } from '@/components/ZapButton';
 
 /** Compact relative timestamp, e.g. "3h", "2d", or a date past a week. */
 function timeAgo(createdAt: number): string {
@@ -119,9 +121,13 @@ export function TaggedNoteCard({ event, onHide, onMute }: TaggedNoteCardProps) {
           </DropdownMenu>
         </div>
       </CardHeader>
-      <CardContent className="pt-0">
+      <CardContent className="pt-0 space-y-2">
         <div className="text-sm text-foreground/90 whitespace-pre-wrap break-words">
           <NoteContent event={event} />
+        </div>
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <ReactionBar target={event} />
+          <ZapButton target={event} />
         </div>
       </CardContent>
     </Card>

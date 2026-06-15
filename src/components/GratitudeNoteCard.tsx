@@ -13,6 +13,8 @@ import { useAuthor } from '@/hooks/useAuthor';
 import { genUserName } from '@/lib/genUserName';
 import type { NostrEvent, NostrMetadata } from '@nostrify/nostrify';
 import { NoteContent } from '@/components/NoteContent';
+import { ReactionBar } from '@/components/ReactionBar';
+import { ZapButton } from '@/components/ZapButton';
 
 interface GratitudeNoteCardProps {
   event: NostrEvent;
@@ -95,6 +97,10 @@ export function GratitudeNoteCard({ event }: GratitudeNoteCardProps) {
             {event.id}
           </div>
         )}
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <ReactionBar target={event} />
+          <ZapButton target={event} />
+        </div>
       </CardContent>
     </Card>
   );
