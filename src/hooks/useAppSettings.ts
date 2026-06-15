@@ -130,12 +130,18 @@ export function useAppSettings(): UseAppSettingsResult {
   const updateSettings = useCallback(
     (patch: Partial<AppSettings>) => {
       if (!pubkey) return;
-      // privacyDefault overwrites; celebratedMilestones unions (monotonic).
+      // privacyDefault overwrites; celebratedMilestones unions (monotonic);
+      // lastSeenNotifications takes the max (read-state never regresses).
       const next: AppSettings = {
         privacyDefault: patch.privacyDefault ?? settings.privacyDefault,
         celebratedMilestones: [
           ...new Set([...settings.celebratedMilestones, ...(patch.celebratedMilestones ?? [])]),
         ].sort((a, b) => a - b),
+        lastSeenNotifications:
+          Math.max(
+            settings.lastSeenNotifications ?? 0,
+            patch.lastSeenNotifications ?? 0
+          ) || undefined,
       };
       writeLocalCache(pubkey, next);
       setLocalCache(next);

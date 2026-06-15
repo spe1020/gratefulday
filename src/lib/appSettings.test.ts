@@ -62,6 +62,13 @@ describe('serialize / parse', () => {
     expect(parseSettings(json).celebratedMilestones).toEqual([7, 30]);
   });
 
+  it('round-trips lastSeenNotifications', () => {
+    const s = { celebratedMilestones: [], lastSeenNotifications: 1_700_000_000 };
+    expect(parseSettings(serializeSettings(s)).lastSeenNotifications).toBe(1_700_000_000);
+    // a non-number is dropped
+    expect(parseSettings('{"celebratedMilestones":[],"lastSeenNotifications":"x"}').lastSeenNotifications).toBeUndefined();
+  });
+
   it('degrades a corrupt or alien payload to empty', () => {
     expect(parseSettings('not json')).toEqual(emptySettings());
     expect(parseSettings('null')).toEqual(emptySettings());
@@ -96,6 +103,25 @@ describe('reconcile — deliberate asymmetry', () => {
         { celebratedMilestones: [7] }
       ).celebratedMilestones
     ).toEqual([7, 30]);
+  });
+
+  it('lastSeenNotifications takes the MAX — read-state never regresses', () => {
+    // A slightly-older device sync must not roll back read-state.
+    expect(
+      reconcile(
+        { celebratedMilestones: [], lastSeenNotifications: 500 },
+        { celebratedMilestones: [], lastSeenNotifications: 300 }
+      ).lastSeenNotifications
+    ).toBe(500);
+    expect(
+      reconcile(
+        { celebratedMilestones: [], lastSeenNotifications: 300 },
+        { celebratedMilestones: [], lastSeenNotifications: 500 }
+      ).lastSeenNotifications
+    ).toBe(500);
+    expect(
+      reconcile({ celebratedMilestones: [] }, null).lastSeenNotifications
+    ).toBeUndefined();
   });
 });
 
