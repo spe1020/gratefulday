@@ -1,73 +1,152 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Heart, RefreshCw, Users } from 'lucide-react';
 import { useCommunityGratitude } from '@/hooks/useGratitudeEntries';
+import { useTaggedGratitude } from '@/hooks/useTaggedGratitude';
+import { useFeedModeration } from '@/hooks/useFeedModeration';
 import { GratitudeNoteCard } from '@/components/GratitudeNoteCard';
+import { TaggedNoteCard } from '@/components/TaggedNoteCard';
+import { mergeFeedEvents } from '@/lib/communityFeedUtils';
+import { cn } from '@/lib/utils';
 
-// Blocked event IDs (client-side filtering for specific posts)
-const BLOCKED_EVENT_IDS: readonly string[] = [
-  '7dc5075c9ed84b5411b5ee2188a510e8359f7d0a22b909157ce2773265a61a70',
-];
+// "Load earlier" widens the journal window by re-querying a larger limit (the
+// 36669 hook isn't infinite). Bounded by a ceiling so the growing-window
+// re-query can't silently degrade at volume — a known v1 simplification; a
+// proper `until`-cursor for 36669 is the follow-up.
+const JOURNAL_PAGE = 20;
+const JOURNAL_MAX = 200;
 
 export function CommunityFeed() {
-  const [limit] = useState(20);
-  const { data: posts, isLoading, refetch, isRefetching } = useCommunityGratitude(limit);
-  const visiblePosts = posts?.filter((p) => !BLOCKED_EVENT_IDS.includes(p.id));
+  const [journalLimit, setJournalLimit] = useState(JOURNAL_PAGE);
+
+  const journal = useCommunityGratitude(journalLimit);
+  const tagged = useTaggedGratitude('all');
+  const { hiddenIds, mutedPubkeys, hideNote, mutePubkey } = useFeedModeration();
+
+  // Interleave both sources newest-first; kind-1 moderation applied, journal
+  // entries left untouched (first-party). Each card routes by event.kind.
+  const events = useMemo(
+    () =>
+      mergeFeedEvents(journal.data ?? [], (tagged.data?.pages ?? []).flat(), {
+        hiddenIds,
+        mutedPubkeys,
+      }),
+    [journal.data, tagged.data, hiddenIds, mutedPubkeys]
+  );
+
+  const isLoading = journal.isLoading || tagged.isLoading;
+  // If we have anything to show, show it (partial results survive one source
+  // failing). Only surface an error when a source failed AND there's nothing to
+  // render — otherwise a fetch failure would masquerade as "No reflections yet".
+  const isError = (journal.isError || tagged.isError) && events.length === 0;
+  const isRefetching = journal.isRefetching || tagged.isRefetching;
+
+  const canWidenJournal = journalLimit < JOURNAL_MAX;
+  const hasMore = canWidenJournal || tagged.hasNextPage;
+  const isLoadingMore = tagged.isFetchingNextPage;
+
+  const refresh = () => {
+    journal.refetch();
+    tagged.refetch();
+  };
+
+  const loadEarlier = () => {
+    if (canWidenJournal) setJournalLimit((n) => Math.min(n + JOURNAL_PAGE, JOURNAL_MAX));
+    if (tagged.hasNextPage) tagged.fetchNextPage();
+  };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-gradient-to-br from-rose-500 to-pink-600">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="p-2 rounded-lg bg-gradient-to-br from-rose-500 to-pink-600 shrink-0">
             <Users className="h-5 w-5 text-white" />
           </div>
-          <div>
-            <h2 className="text-xl font-semibold">Community Reflections</h2>
-            <p className="text-sm text-muted-foreground">
-              Reflections shared by the gratefulday.space community
+          <div className="min-w-0">
+            <h2 className="text-xl font-semibold truncate">Community</h2>
+            <p className="text-sm text-muted-foreground truncate">
+              Journal entries & tagged notes from across Nostr
             </p>
           </div>
         </div>
         <Button
           variant="outline"
           size="sm"
-          onClick={() => refetch()}
+          onClick={refresh}
           disabled={isRefetching}
-          className="gap-2"
+          className="gap-2 shrink-0"
         >
-          <RefreshCw className={`h-4 w-4 ${isRefetching ? 'animate-spin' : ''}`} />
-          Refresh
+          <RefreshCw className={cn('h-4 w-4', isRefetching && 'animate-spin')} />
+          <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>
 
       {isLoading ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {[...Array(6)].map((_, i) => (
+        <div className="space-y-4 max-w-2xl mx-auto">
+          {[...Array(4)].map((_, i) => (
             <Card key={i}>
               <CardHeader className="pb-3">
                 <div className="flex items-center gap-3">
                   <Skeleton className="h-10 w-10 rounded-full" />
                   <div className="space-y-1 flex-1">
                     <Skeleton className="h-4 w-24" />
-                    <Skeleton className="h-3 w-16" />
+                    <Skeleton className="h-3 w-12" />
                   </div>
                 </div>
               </CardHeader>
               <CardContent className="pt-0 space-y-2">
                 <Skeleton className="h-4 w-full" />
                 <Skeleton className="h-4 w-4/5" />
-                <Skeleton className="h-4 w-3/4" />
               </CardContent>
             </Card>
           ))}
         </div>
-      ) : visiblePosts && visiblePosts.length > 0 ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {visiblePosts.map((post) => (
-            <GratitudeNoteCard key={post.id} event={post} />
-          ))}
+      ) : isError ? (
+        <Card className="border-dashed">
+          <CardContent className="py-12 px-8 text-center">
+            <div className="max-w-sm mx-auto space-y-4">
+              <p className="font-medium">Couldn't load the community feed</p>
+              <p className="text-sm text-muted-foreground">
+                There was a problem reaching the relays.
+              </p>
+              <Button variant="outline" size="sm" onClick={refresh} className="gap-2">
+                <RefreshCw className="h-4 w-4" />
+                Try again
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : events.length > 0 ? (
+        <div className="space-y-4 max-w-2xl mx-auto">
+          {events.map((event) =>
+            event.kind === 36669 ? (
+              <GratitudeNoteCard key={event.id} event={event} />
+            ) : (
+              <TaggedNoteCard
+                key={event.id}
+                event={event}
+                onHide={hideNote}
+                onMute={mutePubkey}
+              />
+            )
+          )}
+          <div className="flex justify-center pt-2">
+            {hasMore ? (
+              <Button
+                variant="outline"
+                onClick={loadEarlier}
+                disabled={isLoadingMore}
+                className="gap-2"
+              >
+                {isLoadingMore && <RefreshCw className="h-4 w-4 animate-spin" />}
+                Load earlier
+              </Button>
+            ) : (
+              <p className="text-xs text-muted-foreground">You've reached the beginning.</p>
+            )}
+          </div>
         </div>
       ) : (
         <Card className="border-dashed">
@@ -79,7 +158,7 @@ export function CommunityFeed() {
               <div className="space-y-2">
                 <p className="font-medium">No reflections yet</p>
                 <p className="text-sm text-muted-foreground">
-                  Be the first to share your reflection with the gratefulday.space community!
+                  Share a reflection or post a note tagged #grateful to start the conversation.
                 </p>
               </div>
             </div>

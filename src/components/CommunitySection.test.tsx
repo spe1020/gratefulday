@@ -3,6 +3,11 @@ import { render, screen } from '@testing-library/react';
 import { TestApp } from '@/test/TestApp';
 import { CommunitySection } from './CommunitySection';
 
+// Stable, unambiguous heading strings per view.
+const FEED_SUBTITLE = 'Journal entries & tagged notes from across Nostr';
+const CALENDAR_HEADING = 'Community Calendar';
+const GALAXY_HEADING = 'Gratitude Galaxy';
+
 function renderAt(url: string) {
   window.history.pushState({}, '', url);
   return render(
@@ -17,32 +22,31 @@ afterEach(() => {
 });
 
 describe('CommunitySection URL routing', () => {
-  it('mounts the tagged feed for ?tab=community&view=tagged (not the calendar)', () => {
-    renderAt('/?tab=community&view=tagged');
-
-    expect(screen.getByText('Tagged Gratitude')).toBeInTheDocument();
-    expect(screen.queryByText('Community Calendar')).not.toBeInTheDocument();
-    expect(screen.queryByText('Community Reflections')).not.toBeInTheDocument();
-  });
-
-  it('mounts the community feed by default when no view param is present', () => {
+  it('mounts the merged feed by default (no view param)', () => {
     renderAt('/?tab=community');
 
-    expect(screen.getByText('Community Reflections')).toBeInTheDocument();
-    expect(screen.queryByText('Tagged Gratitude')).not.toBeInTheDocument();
+    expect(screen.getByText(FEED_SUBTITLE)).toBeInTheDocument();
+    expect(screen.queryByText(CALENDAR_HEADING)).not.toBeInTheDocument();
   });
 
   it('mounts the calendar for view=calendar', () => {
     renderAt('/?tab=community&view=calendar');
 
-    expect(screen.getByText('Community Calendar')).toBeInTheDocument();
-    expect(screen.queryByText('Tagged Gratitude')).not.toBeInTheDocument();
+    expect(screen.getByText(CALENDAR_HEADING)).toBeInTheDocument();
+    expect(screen.queryByText(FEED_SUBTITLE)).not.toBeInTheDocument();
   });
 
-  it('falls back to the feed for an unknown view param', () => {
-    renderAt('/?tab=community&view=bogus');
+  it('mounts the galaxy for view=galaxy', () => {
+    renderAt('/?tab=community&view=galaxy');
 
-    expect(screen.getByText('Community Reflections')).toBeInTheDocument();
-    expect(screen.queryByText('Tagged Gratitude')).not.toBeInTheDocument();
+    expect(screen.getByText(GALAXY_HEADING)).toBeInTheDocument();
+    expect(screen.queryByText(FEED_SUBTITLE)).not.toBeInTheDocument();
+  });
+
+  it('falls back to the feed for a retired/unknown view (e.g. the old "tagged")', () => {
+    renderAt('/?tab=community&view=tagged');
+
+    expect(screen.getByText(FEED_SUBTITLE)).toBeInTheDocument();
+    expect(screen.queryByText(CALENDAR_HEADING)).not.toBeInTheDocument();
   });
 });

@@ -1,12 +1,13 @@
 import { useSearchParams } from 'react-router-dom';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { CommunityFeed } from '@/components/CommunityFeed';
-import { TaggedFeed } from '@/components/TaggedFeed';
 import { CommunityCalendar } from '@/components/CommunityCalendar';
 import { GratitudeGalaxy } from '@/components/GratitudeGalaxy';
 import { cn } from '@/lib/utils';
 
-const COMMUNITY_VIEWS = ['feed', 'tagged', 'calendar', 'galaxy'] as const;
+// The feed now merges journal entries (36669) + tagged notes (kind 1); the
+// separate "tagged" view is retired. Calendar/galaxy stay 36669-only.
+const COMMUNITY_VIEWS = ['feed', 'calendar', 'galaxy'] as const;
 type CommunityView = (typeof COMMUNITY_VIEWS)[number];
 
 function isCommunityView(value: string | null): value is CommunityView {
@@ -44,16 +45,6 @@ export function CommunitySection() {
             Feed
           </ToggleGroupItem>
           <ToggleGroupItem
-            value="tagged"
-            className={cn(
-              'px-4 py-2 text-sm rounded-md',
-              'data-[state=on]:bg-amber-100 dark:data-[state=on]:bg-amber-900/30',
-              'data-[state=on]:text-amber-700 dark:data-[state=on]:text-amber-300'
-            )}
-          >
-            Tagged
-          </ToggleGroupItem>
-          <ToggleGroupItem
             value="calendar"
             className={cn(
               'px-4 py-2 text-sm rounded-md',
@@ -77,7 +68,6 @@ export function CommunitySection() {
       </div>
 
       {activeView === 'feed' && <CommunityFeed />}
-      {activeView === 'tagged' && <TaggedFeed />}
       {activeView === 'calendar' && <CommunityCalendar />}
       {activeView === 'galaxy' && <GratitudeGalaxy />}
     </div>

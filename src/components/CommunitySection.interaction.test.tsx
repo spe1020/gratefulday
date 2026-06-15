@@ -7,7 +7,8 @@ import { CommunitySection } from './CommunitySection';
 
 // Mirror of Index.tsx's two-tab wiring: an outer Tabs (Calendar/Community)
 // driven by the `tab` search param, with CommunitySection inside the community
-// content. Reproduces the real interaction between the two tab systems.
+// content. Guards that the inner sub-tabs switch views without escaping to the
+// daily calendar (the header-logo overlap that once ate these clicks).
 function Harness() {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') || 'calendar';
@@ -25,6 +26,8 @@ function Harness() {
   );
 }
 
+const FEED_SUBTITLE = 'Journal entries & tagged notes from across Nostr';
+
 function renderAt(url: string) {
   window.history.pushState({}, '', url);
   return render(
@@ -39,23 +42,24 @@ afterEach(() => {
 });
 
 describe('CommunitySection sub-tab navigation (inside the outer Tabs)', () => {
-  it('clicking Tagged from the feed shows the tagged feed, staying in Community', () => {
+  it('clicking Galaxy from the feed switches view, staying in Community', () => {
     renderAt('/?tab=community');
-    expect(screen.getByText('Community Reflections')).toBeInTheDocument();
+    expect(screen.getByText(FEED_SUBTITLE)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('Tagged'));
+    // "Galaxy" is unique to the inner sub-tabs (outer tabs are Calendar/Community).
+    fireEvent.click(screen.getByText('Galaxy'));
 
-    expect(screen.getByText('Tagged Gratitude')).toBeInTheDocument();
+    expect(screen.getByText('Gratitude Galaxy')).toBeInTheDocument();
     expect(screen.queryByText('DAILY CALENDAR')).not.toBeInTheDocument();
   });
 
-  it('clicking Feed from the tagged view shows the community feed, not the daily calendar', () => {
-    renderAt('/?tab=community&view=tagged');
-    expect(screen.getByText('Tagged Gratitude')).toBeInTheDocument();
+  it('clicking Feed from the galaxy view returns to the merged feed, not the daily calendar', () => {
+    renderAt('/?tab=community&view=galaxy');
+    expect(screen.getByText('Gratitude Galaxy')).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Feed'));
 
-    expect(screen.getByText('Community Reflections')).toBeInTheDocument();
+    expect(screen.getByText(FEED_SUBTITLE)).toBeInTheDocument();
     expect(screen.queryByText('DAILY CALENDAR')).not.toBeInTheDocument();
   });
 });

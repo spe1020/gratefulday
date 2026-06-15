@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
-import { Copy, Check, EllipsisVertical } from 'lucide-react';
+import { Copy, Check, EllipsisVertical, MessageSquare } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,6 +13,11 @@ import { useAuthor } from '@/hooks/useAuthor';
 import { genUserName } from '@/lib/genUserName';
 import type { NostrEvent, NostrMetadata } from '@nostrify/nostrify';
 import { NoteContent } from '@/components/NoteContent';
+import { ReactionBar } from '@/components/ReactionBar';
+import { ZapButton } from '@/components/ZapButton';
+// 36669 is addressable → NIP-22 (kind 1111) comments. Journal cards import ONLY
+// this comment stack; the kind-1 NIP-10 reply stack is never imported here.
+import { CommentsSection } from '@/components/comments/CommentsSection';
 
 interface GratitudeNoteCardProps {
   event: NostrEvent;
@@ -25,6 +30,7 @@ export function GratitudeNoteCard({ event }: GratitudeNoteCardProps) {
   const avatarUrl = metadata?.picture;
   const [showId, setShowId] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showComments, setShowComments] = useState(false);
 
   const dayTag = event.tags.find(([name]) => name === 'day')?.[1];
   const dateTag = event.tags.find(([name]) => name === 'd')?.[1];
@@ -94,6 +100,29 @@ export function GratitudeNoteCard({ event }: GratitudeNoteCardProps) {
           <div className="p-2 rounded-md bg-muted text-xs break-all border border-muted-foreground/10">
             {event.id}
           </div>
+        )}
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <div className="flex items-center gap-1">
+            <ReactionBar target={event} />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowComments((prev) => !prev)}
+              aria-expanded={showComments}
+              className="h-7 gap-1 px-2 text-muted-foreground"
+            >
+              <MessageSquare className="h-4 w-4" />
+              <span className="text-xs">Comments</span>
+            </Button>
+          </div>
+          <ZapButton target={event} />
+        </div>
+        {/* Lazy: the NIP-22 thread loads only when expanded. */}
+        {showComments && (
+          <CommentsSection
+            root={event}
+            className="mt-3 border-0 shadow-none bg-transparent"
+          />
         )}
       </CardContent>
     </Card>
