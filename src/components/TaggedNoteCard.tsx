@@ -1,8 +1,18 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { nip19 } from 'nostr-tools';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
-import { Copy, Check, EllipsisVertical, EyeOff, UserX, MessageSquare } from 'lucide-react';
+import {
+  Copy,
+  Check,
+  EllipsisVertical,
+  EyeOff,
+  UserX,
+  MessageSquare,
+  CornerUpLeft,
+} from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,9 +21,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useAuthor } from '@/hooks/useAuthor';
+import { useEmbeddedEvent } from '@/hooks/useEmbeddedEvent';
 import { useToast } from '@/hooks/useToast';
 import { genUserName } from '@/lib/genUserName';
 import { timeAgo } from '@/lib/timeUtils';
+import { resolveThreadRoot } from '@/lib/nip10';
+import type { EmbedRef } from '@/lib/embedRef';
 import type { NostrEvent, NostrMetadata } from '@nostrify/nostrify';
 import { NoteContent } from '@/components/NoteContent';
 import { ReactionBar } from '@/components/ReactionBar';
@@ -22,6 +35,63 @@ import { ZapButton } from '@/components/ZapButton';
 // NIP-22 (1111) comment stack is never imported here. This structural split is
 // what makes the invisible-comment trap (1111 on a kind-1 note) unreachable.
 import { Nip10ReplySection } from '@/components/Nip10ReplySection';
+
+/**
+ * "replying to @rootAuthor →" affordance shown when the feed note is itself a
+ * reply (gratitude in conversation). Resolves the thread root, fetches it via
+ * the shared embed hook to name its author, and links to the root's nevent
+ * page. Renders nothing for a non-reply note. While loading or when the root is
+ * unfetchable it still links (generic "a thread"); only if the root id can't be
+ * NIP-19 encoded (rare) does it fall back to plain text — so there is no broken
+ * link, though in that one case there is no link at all.
+ */
+function ReplyingToLink({ note }: { note: NostrEvent }) {
+  const root = useMemo(() => resolveThreadRoot(note), [note]);
+  const ref = useMemo<EmbedRef | null>(
+    () =>
+      root
+        ? { kind: 'event', id: root.id, relays: root.relayHint ? [root.relayHint] : undefined }
+        : null,
+    [root]
+  );
+  const { data: rootEvent, isLoading } = useEmbeddedEvent(ref, !!root);
+  const author = useAuthor(rootEvent?.pubkey ?? '');
+
+  if (!root) return null;
+
+  let nevent: string | null = null;
+  try {
+    nevent = nip19.neventEncode({
+      id: root.id,
+      relays: root.relayHint ? [root.relayHint] : [],
+      author: rootEvent?.pubkey,
+    });
+  } catch {
+    nevent = null;
+  }
+
+  const name = rootEvent ? metadataName(author.data?.metadata, rootEvent.pubkey) : null;
+  const who = isLoading ? '…' : name ? `@${name}` : 'a thread';
+
+  const inner = (
+    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+      <CornerUpLeft className="h-3 w-3 shrink-0" />
+      replying to {who}
+    </span>
+  );
+
+  return nevent ? (
+    <Link to={`/${nevent}`} className="inline-flex w-fit hover:text-foreground/80">
+      {inner}
+    </Link>
+  ) : (
+    inner
+  );
+}
+
+function metadataName(metadata: NostrMetadata | undefined, pubkey: string): string {
+  return metadata?.name || genUserName(pubkey);
+}
 
 interface TaggedNoteCardProps {
   event: NostrEvent;
@@ -112,6 +182,7 @@ export function TaggedNoteCard({ event, onHide, onMute }: TaggedNoteCardProps) {
         </div>
       </CardHeader>
       <CardContent className="pt-0 space-y-2">
+        <ReplyingToLink note={event} />
         <div className="text-sm text-foreground/90 whitespace-pre-wrap break-words">
           <NoteContent event={event} />
         </div>

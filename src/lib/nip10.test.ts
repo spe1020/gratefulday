@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { NostrEvent } from '@nostrify/nostrify';
-import { buildNip10ReplyTags, isNip10Reply } from './nip10';
+import { buildNip10ReplyTags, isNip10Reply, resolveThreadRoot } from './nip10';
 
 function rootNote(overrides: Partial<NostrEvent> = {}): NostrEvent {
   return {
@@ -44,6 +44,42 @@ describe('buildNip10ReplyTags', () => {
     const eTag = buildNip10ReplyTags(rootNote()).find(([n]) => n === 'e');
     expect(eTag?.[2]).toBe('');
   });
+
+  it('replying to a REPLY emits root + reply markers, preserving the thread root', () => {
+    // The target is itself a reply: root marker → THE_ROOT, reply marker → target.
+    const target = rootNote({
+      id: 'target-id',
+      pubkey: 'target-author',
+      tags: [
+        ['t', 'grateful'],
+        ['e', 'THE_ROOT', 'wss://r', 'root', 'root-author'],
+        ['p', 'someone'],
+      ],
+    });
+    const tags = buildNip10ReplyTags(target, 'wss://hint');
+    const eTags = tags.filter(([n]) => n === 'e');
+
+    expect(eTags).toContainEqual(['e', 'THE_ROOT', 'wss://r', 'root', 'root-author']);
+    expect(eTags).toContainEqual(['e', 'target-id', 'wss://hint', 'reply', 'target-author']);
+    expect(eTags).toHaveLength(2);
+    // exactly one root + one reply marker
+    expect(eTags.filter((t) => t[3] === 'root')).toHaveLength(1);
+    expect(eTags.filter((t) => t[3] === 'reply')).toHaveLength(1);
+
+    // p tags union the chain: target's p + target author + root author.
+    const pTags = tags.filter(([n]) => n === 'p').map(([, v]) => v).sort();
+    expect(pTags).toEqual(['root-author', 'someone', 'target-author']);
+  });
+
+  it('omits the root pubkey hint when the thread root carries none (still valid 4-field)', () => {
+    const target = rootNote({
+      id: 'target-id',
+      pubkey: 'target-author',
+      tags: [['t', 'grateful'], ['e', 'THE_ROOT']], // positional root, no pubkey hint
+    });
+    const rootMarker = buildNip10ReplyTags(target).find((t) => t[3] === 'root');
+    expect(rootMarker).toEqual(['e', 'THE_ROOT', '', 'root']); // 4 fields, no empty pubkey slot
+  });
 });
 
 describe('isNip10Reply', () => {
@@ -84,5 +120,44 @@ describe('isNip10Reply', () => {
 
   it('rejects a note with no e tags', () => {
     expect(isNip10Reply(rootNote({ id: 'top' }), ROOT)).toBe(false);
+  });
+});
+
+describe('resolveThreadRoot', () => {
+  it('returns null for a note that is itself a root (no e tags)', () => {
+    expect(resolveThreadRoot(rootNote())).toBeNull();
+  });
+
+  it('prefers the root marker, with pubkey + relay hints', () => {
+    const reply = rootNote({
+      tags: [
+        ['e', 'the-root', 'wss://relay', 'root', 'root-author'],
+        ['e', 'the-parent', '', 'reply', 'parent-author'],
+      ],
+    });
+    expect(resolveThreadRoot(reply)).toEqual({
+      id: 'the-root',
+      relayHint: 'wss://relay',
+      pubkey: 'root-author',
+    });
+  });
+
+  it('falls back to the reply marker when there is no root marker', () => {
+    const reply = rootNote({ tags: [['e', 'the-parent', '', 'reply', 'parent-author']] });
+    expect(resolveThreadRoot(reply)).toEqual({ id: 'the-parent', pubkey: 'parent-author' });
+  });
+
+  it('uses the FIRST e tag in the legacy unmarked (positional) scheme', () => {
+    const reply = rootNote({ tags: [['e', 'positional-root'], ['e', 'positional-parent']] });
+    expect(resolveThreadRoot(reply)).toEqual({ id: 'positional-root' });
+  });
+
+  it('reads a pubkey hint from the legacy 4-field positional form', () => {
+    const reply = rootNote({ tags: [['e', 'root', 'wss://r', 'root-pubkey']] });
+    expect(resolveThreadRoot(reply)).toEqual({ id: 'root', relayHint: 'wss://r', pubkey: 'root-pubkey' });
+  });
+
+  it('returns null when the only e tags are mentions (not a reply)', () => {
+    expect(resolveThreadRoot(rootNote({ tags: [['e', 'x', '', 'mention']] }))).toBeNull();
   });
 });
