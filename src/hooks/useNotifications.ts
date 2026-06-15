@@ -56,8 +56,13 @@ export function useNotifications() {
   });
   const noteIds = useMemo(() => new Set((myNotes ?? []).map((e) => e.id)), [myNotes]);
 
-  const coordsArr = useMemo(() => [...coords], [coords]);
-  const noteIdsArr = useMemo(() => [...noteIds], [noteIds]);
+  // Sorted so the query key + filters are stable regardless of Set iteration
+  // order. Keying by the actual ids (not just counts) is required — a new note
+  // replacing an old one keeps the count but must refetch with new filters.
+  const coordsArr = useMemo(() => [...coords].sort(), [coords]);
+  const noteIdsArr = useMemo(() => [...noteIds].sort(), [noteIds]);
+  const coordsKey = useMemo(() => coordsArr.join(','), [coordsArr]);
+  const noteIdsKey = useMemo(() => noteIdsArr.join(','), [noteIdsArr]);
   // The zap filter (#p = me) runs for any logged-in user, even one with no
   // gathered notes yet — so readiness only needs a pubkey.
   const ready = !!pubkey;
@@ -69,7 +74,7 @@ export function useNotifications() {
     refetch,
     isRefetching,
   } = useQuery<NostrEvent[]>({
-    queryKey: ['notifications', pubkey, coordsArr.length, noteIdsArr.length],
+    queryKey: ['notifications', pubkey, coordsKey, noteIdsKey],
     enabled: ready,
     staleTime: 60 * 1000,
     queryFn: async (c) => {

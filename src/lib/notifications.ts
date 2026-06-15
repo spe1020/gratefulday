@@ -124,8 +124,11 @@ function contentTarget(event: NostrEvent, content: NotifiableContent): Notificat
  * profile zap (undefined target).
  */
 function zapTarget(event: NostrEvent): NotificationTarget | undefined {
+  // Only a 36669 `a` coordinate maps to an entry — a NIP-57 zap can reference
+  // any addressable kind (e.g. long-form 30023), and building a 36669 naddr
+  // from one would mis-route the tap. Otherwise fall back to `e`, else profile.
   const coord = event.tags.find(([name]) => name === 'a')?.[1];
-  if (coord) return { kind: 36669, ref: coord };
+  if (coord && coord.startsWith('36669:')) return { kind: 36669, ref: coord };
   const noteId = event.tags.find(([name]) => name === 'e')?.[1];
   if (noteId) return { kind: 1, ref: noteId };
   return undefined;

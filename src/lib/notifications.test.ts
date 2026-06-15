@@ -120,6 +120,25 @@ describe('mapEventToNotification', () => {
     expect(item?.target).toBeUndefined();
   });
 
+  it('does not mis-route a zap on a non-36669 addressable (#a) — falls back to #e', () => {
+    // A zap referencing a long-form (30023) addressable plus the note id: the
+    // target must be the kind-1 note, NOT a bogus 36669 naddr from the 30023 #a.
+    const item = mapEventToNotification(
+      zapReceipt({ actor: 'zapper', tags: [['a', '30023:author:slug'], ['e', NOTE_ID]] }),
+      content
+    );
+    expect(item?.target).toEqual({ kind: 1, ref: NOTE_ID });
+  });
+
+  it('treats a zap on a non-36669 addressable with no #e as a profile zap', () => {
+    const item = mapEventToNotification(
+      zapReceipt({ actor: 'zapper', tags: [['a', '30023:author:slug']] }),
+      content
+    );
+    expect(item?.type).toBe('zap');
+    expect(item?.target).toBeUndefined();
+  });
+
   it('ignores a zap whose recipient (#p) is not me', () => {
     expect(
       mapEventToNotification(zapReceipt({ actor: 'zapper', recipient: 'someone-else' }), content)
