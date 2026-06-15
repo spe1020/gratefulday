@@ -6,6 +6,7 @@ import {
   aggregateReactions,
   buildReactionTags,
   findOwnReaction,
+  findOwnReactions,
   isAddressable,
 } from './reactionUtils';
 
@@ -133,5 +134,27 @@ describe('findOwnReaction', () => {
   it('returns undefined when the user has not reacted with that emoji', () => {
     expect(findOwnReaction([reaction('me', '🌱')], 'me', '🙏')).toBeUndefined();
     expect(findOwnReaction([reaction('other', '🙏')], 'me', '🙏')).toBeUndefined();
+  });
+
+  it('detects own reactions across interop forms (whitespace, ❤ vs ❤️)', () => {
+    // Reacted from another client as bare ❤ (no U+FE0F) or with padding — still
+    // recognized as the user's own ❤️, so they can toggle/un-react it.
+    expect(findOwnReaction([reaction('me', '❤')], 'me', '❤️')).toBeDefined();
+    expect(findOwnReaction([reaction('me', ' ❤️ ')], 'me', '❤️')).toBeDefined();
+    expect(findOwnReaction([reaction('me', '🙏')], 'me', '❤️')).toBeUndefined();
+  });
+});
+
+describe('findOwnReactions (un-react targets)', () => {
+  it('returns ALL of the user’s matching reactions, newest first, normalized', () => {
+    const events = [
+      reaction('me', '❤️', 100),
+      reaction('me', '❤', 300), // bare heart, different client
+      reaction('me', ' ❤️ ', 200), // padded
+      reaction('other', '❤️', 400),
+    ];
+    const own = findOwnReactions(events, 'me', '❤️');
+    expect(own.map((e) => e.created_at)).toEqual([300, 200, 100]); // all three, newest first
+    expect(own.every((e) => e.pubkey === 'me')).toBe(true);
   });
 });

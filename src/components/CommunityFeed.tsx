@@ -37,7 +37,10 @@ export function CommunityFeed() {
   );
 
   const isLoading = journal.isLoading || tagged.isLoading;
-  const isError = journal.isError && tagged.isError;
+  // If we have anything to show, show it (partial results survive one source
+  // failing). Only surface an error when a source failed AND there's nothing to
+  // render — otherwise a fetch failure would masquerade as "No reflections yet".
+  const isError = (journal.isError || tagged.isError) && events.length === 0;
   const isRefetching = journal.isRefetching || tagged.isRefetching;
 
   const canWidenJournal = journalLimit < JOURNAL_MAX;

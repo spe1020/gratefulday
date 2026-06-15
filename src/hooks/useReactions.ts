@@ -12,6 +12,7 @@ import {
   aggregateReactions,
   buildReactionTags,
   findOwnReaction,
+  findOwnReactions,
   isAddressable,
 } from '@/lib/reactionUtils';
 
@@ -75,15 +76,18 @@ export function useReactions(target: NostrEvent): UseReactionsResult {
       if (!user || !CURATED_EMOJIS.includes(emoji)) return;
 
       const current = events ?? [];
-      const mine = findOwnReaction(current, user.pubkey, emoji);
+      const mine = findOwnReactions(current, user.pubkey, emoji);
 
-      if (mine) {
-        // Un-react: optimistically drop it, then publish a NIP-09 delete.
+      if (mine.length > 0) {
+        // Un-react: optimistically drop ALL of the user's matching reactions,
+        // then publish ONE NIP-09 delete referencing every one of them (a stray
+        // older duplicate would otherwise keep the note looking "reacted").
+        const ids = new Set(mine.map((e) => e.id));
         queryClient.setQueryData<NostrEvent[]>(queryKey, (prev) =>
-          (prev ?? []).filter((e) => e.id !== mine.id)
+          (prev ?? []).filter((e) => !ids.has(e.id))
         );
         publish(
-          { kind: 5, content: '', tags: [['e', mine.id], ['k', '7']] },
+          { kind: 5, content: '', tags: [...mine.map((e) => ['e', e.id]), ['k', '7']] },
           {
             onSettled: () => queryClient.invalidateQueries({ queryKey }),
           }

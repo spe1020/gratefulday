@@ -43,12 +43,18 @@ export function isNip10Reply(event: NostrEvent, rootId: string): boolean {
   const eTags = event.tags.filter(([name]) => name === 'e');
   if (eTags.length === 0) return false;
 
-  const anyMarked = eTags.some((tag) => tag[3]);
+  // A tag uses the marked scheme only if slot 3 is an actual marker word — NOT
+  // just any truthy value. The legacy 4-field form `["e", id, relay, pubkey]`
+  // puts a pubkey hint in slot 3, which must not be mistaken for a marker (else
+  // a legitimate legacy reply gets misclassified as "marked" and rejected).
+  const MARKERS = new Set(['root', 'reply', 'mention']);
+  const anyMarked = eTags.some((tag) => MARKERS.has(tag[3]));
   if (anyMarked) {
     return eTags.some(
       (tag) => tag[1] === rootId && (tag[3] === 'root' || tag[3] === 'reply')
     );
   }
-  // Legacy positional scheme: an unmarked e-reference to the root is a reply.
+  // Legacy scheme (positional, or 4-field with a pubkey hint in slot 3): an
+  // e-reference to the root is a reply.
   return eTags.some((tag) => tag[1] === rootId);
 }

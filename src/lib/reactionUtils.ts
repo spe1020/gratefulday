@@ -119,16 +119,29 @@ export function aggregateReactions(
 }
 
 /**
- * The user's own kind-7 event for `emoji`, if any — returned (not just a bool)
- * so the caller can reference its id in a NIP-09 delete to un-react. The newest
- * is returned when there are duplicates.
+ * ALL of the user's own kind-7 events for `emoji`, newest first. Matching is
+ * normalized (trim + strip U+FE0F) the same way `aggregateReactions` is, so a
+ * reaction posted from another client as "❤" or with surrounding whitespace is
+ * still recognized as the user's own. Returns every match (not just the newest)
+ * so un-react can delete all of them — leaving an older duplicate behind would
+ * keep the note looking "reacted".
  */
+export function findOwnReactions(
+  events: NostrEvent[],
+  pubkey: string,
+  emoji: string
+): NostrEvent[] {
+  const target = normalizeReaction(emoji);
+  return events
+    .filter((e) => e.pubkey === pubkey && normalizeReaction(e.content) === target)
+    .sort((a, b) => b.created_at - a.created_at);
+}
+
+/** The user's own (newest) reaction for `emoji`, or undefined. See findOwnReactions. */
 export function findOwnReaction(
   events: NostrEvent[],
   pubkey: string,
   emoji: string
 ): NostrEvent | undefined {
-  return events
-    .filter((e) => e.pubkey === pubkey && e.content.trim() === emoji)
-    .sort((a, b) => b.created_at - a.created_at)[0];
+  return findOwnReactions(events, pubkey, emoji)[0];
 }

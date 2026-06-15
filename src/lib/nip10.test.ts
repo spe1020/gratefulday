@@ -72,6 +72,16 @@ describe('isNip10Reply', () => {
     expect(isNip10Reply(reply, ROOT)).toBe(true);
   });
 
+  it('accepts a legacy 4-field e tag whose 4th element is a pubkey hint, not a marker', () => {
+    // ["e", rootId, relay, rootPubkey] — slot 3 is a pubkey, NOT "root"/"reply".
+    // Must not be mistaken for the marked scheme and rejected.
+    const reply = {
+      ...rootNote({ id: 'r4' }),
+      tags: [['e', ROOT, 'wss://relay.example', 'f'.repeat(64)]],
+    };
+    expect(isNip10Reply(reply, ROOT)).toBe(true);
+  });
+
   it('rejects a note with no e tags', () => {
     expect(isNip10Reply(rootNote({ id: 'top' }), ROOT)).toBe(false);
   });
