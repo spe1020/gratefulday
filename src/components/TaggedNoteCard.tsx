@@ -13,6 +13,7 @@ import {
 import { useAuthor } from '@/hooks/useAuthor';
 import { useToast } from '@/hooks/useToast';
 import { genUserName } from '@/lib/genUserName';
+import { timeAgo } from '@/lib/timeUtils';
 import type { NostrEvent, NostrMetadata } from '@nostrify/nostrify';
 import { NoteContent } from '@/components/NoteContent';
 import { ReactionBar } from '@/components/ReactionBar';
@@ -21,22 +22,6 @@ import { ZapButton } from '@/components/ZapButton';
 // NIP-22 (1111) comment stack is never imported here. This structural split is
 // what makes the invisible-comment trap (1111 on a kind-1 note) unreachable.
 import { Nip10ReplySection } from '@/components/Nip10ReplySection';
-
-/** Compact relative timestamp, e.g. "3h", "2d", or a date past a week. */
-function timeAgo(createdAt: number): string {
-  const seconds = Math.floor(Date.now() / 1000) - createdAt;
-  if (seconds < 60) return 'now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d`;
-  return new Date(createdAt * 1000).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-  });
-}
 
 interface TaggedNoteCardProps {
   event: NostrEvent;
