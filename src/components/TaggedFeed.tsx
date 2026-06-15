@@ -3,7 +3,11 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Hash, RefreshCw, Sparkles } from 'lucide-react';
-import { useTaggedGratitude, type TaggedFilter } from '@/hooks/useTaggedGratitude';
+import {
+  useTaggedGratitude,
+  TAGGED_HASHTAGS,
+  type TaggedFilter,
+} from '@/hooks/useTaggedGratitude';
 import { useFeedModeration } from '@/hooks/useFeedModeration';
 import { TaggedNoteCard } from '@/components/TaggedNoteCard';
 import { filterTaggedNotes } from '@/lib/taggedFeedUtils';
@@ -11,8 +15,7 @@ import { cn } from '@/lib/utils';
 
 const FILTERS: { value: TaggedFilter; label: string }[] = [
   { value: 'all', label: 'All' },
-  { value: 'grateful', label: '#grateful' },
-  { value: 'gratefulchain', label: '#gratefulchain' },
+  ...TAGGED_HASHTAGS.map((tag) => ({ value: tag, label: `#${tag}` })),
 ];
 
 export function TaggedFeed() {
@@ -49,7 +52,7 @@ export function TaggedFeed() {
           <div className="min-w-0">
             <h2 className="text-xl font-semibold truncate">Tagged Gratitude</h2>
             <p className="text-sm text-muted-foreground truncate">
-              Notes from across Nostr tagged #grateful & #gratefulchain
+              Notes from across Nostr tagged #grateful, #thankful, #blessed & more
             </p>
           </div>
         </div>

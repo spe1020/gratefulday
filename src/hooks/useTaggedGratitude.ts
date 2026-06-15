@@ -2,13 +2,26 @@ import { useNostr } from '@nostrify/react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import type { NostrEvent } from '@nostrify/nostrify';
 
-/** Which open-network gratitude hashtags to surface. */
-export type TaggedFilter = 'all' | 'grateful' | 'gratefulchain';
+/**
+ * Open-network gratitude / faith hashtags the feed surfaces. Single source of
+ * truth — the relay query and the filter chips both derive from this list.
+ */
+export const TAGGED_HASHTAGS = [
+  'grateful',
+  'gratefulchain',
+  'thankful',
+  'blessed',
+  'faithstr',
+  'biblestr',
+] as const;
+
+/** Which hashtag(s) to surface: every tag ('all') or a single one. */
+export type TaggedFilter = 'all' | (typeof TAGGED_HASHTAGS)[number];
 
 const PAGE_SIZE = 20;
 
 function tagsForFilter(filter: TaggedFilter): string[] {
-  return filter === 'all' ? ['grateful', 'gratefulchain'] : [filter];
+  return filter === 'all' ? [...TAGGED_HASHTAGS] : [filter];
 }
 
 /**
