@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
-import { Copy, Check, EllipsisVertical, EyeOff, UserX } from 'lucide-react';
+import { Copy, Check, EllipsisVertical, EyeOff, UserX, MessageSquare } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,6 +17,10 @@ import type { NostrEvent, NostrMetadata } from '@nostrify/nostrify';
 import { NoteContent } from '@/components/NoteContent';
 import { ReactionBar } from '@/components/ReactionBar';
 import { ZapButton } from '@/components/ZapButton';
+// kind 1 → NIP-10 replies. Tagged-note cards import ONLY this reply stack; the
+// NIP-22 (1111) comment stack is never imported here. This structural split is
+// what makes the invisible-comment trap (1111 on a kind-1 note) unreachable.
+import { Nip10ReplySection } from '@/components/Nip10ReplySection';
 
 /** Compact relative timestamp, e.g. "3h", "2d", or a date past a week. */
 function timeAgo(createdAt: number): string {
@@ -48,6 +52,7 @@ export function TaggedNoteCard({ event, onHide, onMute }: TaggedNoteCardProps) {
   const displayName = metadata?.name || genUserName(event.pubkey);
   const avatarUrl = metadata?.picture;
   const [copied, setCopied] = useState(false);
+  const [showReplies, setShowReplies] = useState(false);
   const { toast } = useToast();
 
   return (
@@ -126,9 +131,23 @@ export function TaggedNoteCard({ event, onHide, onMute }: TaggedNoteCardProps) {
           <NoteContent event={event} />
         </div>
         <div className="flex items-center justify-between gap-2 pt-1">
-          <ReactionBar target={event} />
+          <div className="flex items-center gap-1">
+            <ReactionBar target={event} />
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowReplies((prev) => !prev)}
+              aria-expanded={showReplies}
+              className="h-7 gap-1 px-2 text-muted-foreground"
+            >
+              <MessageSquare className="h-4 w-4" />
+              <span className="text-xs">Reply</span>
+            </Button>
+          </div>
           <ZapButton target={event} />
         </div>
+        {/* Lazy: the NIP-10 thread loads only when expanded. */}
+        {showReplies && <Nip10ReplySection root={event} />}
       </CardContent>
     </Card>
   );
