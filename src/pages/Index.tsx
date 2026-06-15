@@ -87,8 +87,10 @@ export default function Index() {
         >
           <div className="container mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex items-center justify-between h-[88px] sm:h-[96px] md:h-[104px]">
-              {/* Left: Brand Block - Logo (Dominant) */}
-              <div className="brand flex items-center py-6 sm:py-7 md:py-8">
+              {/* Left: Brand Block - Logo (Dominant). pointer-events-none so the
+                  oversized logo's overflow below the header can't intercept clicks
+                  on the content beneath it; the Logo's own <Link> re-enables them. */}
+              <div className="brand flex items-center py-6 sm:py-7 md:py-8 pointer-events-none">
                 <Logo 
                   showText={false} 
                   size="header" 
