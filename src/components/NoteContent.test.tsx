@@ -129,6 +129,9 @@ describe('NoteContent', () => {
     expect(img).toBeInTheDocument();
     expect(img).toHaveAttribute('src', 'https://host.example/pic.png');
     expect(img).toHaveAttribute('loading', 'lazy');
+    // a11y: the image link has an accessible name (non-empty alt + aria-label).
+    expect(img).toHaveAttribute('alt', 'Image attachment');
+    expect(screen.getByRole('link', { name: 'Open image attachment' })).toBeInTheDocument();
   });
 
   it('renders a Blossom .mp4 as an inline <video preload="none">, not a link', () => {

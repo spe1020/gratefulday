@@ -11,6 +11,7 @@ import { genUserName } from '@/lib/genUserName';
 import { decodeEmbedRef } from '@/lib/embedRef';
 import { isEncryptedEntry } from '@/lib/privacyUtils';
 import { detectMediaType, splitTrailingPunctuation, type MediaType } from '@/lib/mediaUtils';
+import { timeAgo } from '@/lib/timeUtils';
 import { cn } from '@/lib/utils';
 
 interface NoteContentProps {
@@ -168,10 +169,16 @@ function InlineMedia({ url, type }: { url: string; type: MediaType }) {
 
   if (type === 'image') {
     return (
-      <a href={url} target="_blank" rel="noopener noreferrer" className="block my-2">
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block my-2"
+        aria-label="Open image attachment"
+      >
         <img
           src={url}
-          alt=""
+          alt="Image attachment"
           loading="lazy"
           onError={() => setFailed(true)}
           className="max-h-80 w-auto max-w-full rounded-lg border border-border object-contain"
@@ -210,19 +217,6 @@ function RefLink({ nostrId, label }: { nostrId: string; label: string }) {
       {label}
     </Link>
   );
-}
-
-/** Compact relative timestamp like "3h", "2d", or a short date past a week. */
-function relativeTime(createdAt: number): string {
-  const seconds = Math.floor(Date.now() / 1000) - createdAt;
-  if (seconds < 60) return 'now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d`;
-  return new Date(createdAt * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 /** Muted fallback chip for an embed that can't be shown (not found / encrypted). */
@@ -265,7 +259,7 @@ function EmbeddedBody({
         </Avatar>
         <span className="text-xs font-semibold truncate">{displayName}</span>
         <span className="text-xs text-muted-foreground shrink-0">
-          · {relativeTime(event.created_at)}
+          · {timeAgo(event.created_at)}
         </span>
       </div>
       {/* depth + 1 → inner nostr refs become plain links (recursion guard). */}

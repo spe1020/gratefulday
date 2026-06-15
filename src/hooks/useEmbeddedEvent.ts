@@ -7,8 +7,11 @@ import { embedRefKey, type EmbedRef } from '@/lib/embedRef';
 /**
  * Fetch a single embedded event for a decoded NIP-19 ref.
  *
- * - `staleTime: Infinity` — an embedded event is immutable, so it's fetched once
- *   and cached forever; multiple cards referencing the same note share the fetch.
+ * - `staleTime: Infinity` — an embedded event is immutable, so it's never
+ *   refetched while it stays in cache; multiple cards referencing the same note
+ *   share the one fetch. `gcTime` (~30 min) bounds memory: an entry inactive for
+ *   that long is dropped and re-fetched if seen again — a deliberate trade-off
+ *   over `gcTime: Infinity`, which would retain every embed ever viewed.
  * - `enabled` is gated by the caller (IntersectionObserver) so off-screen embeds
  *   don't fetch until scrolled near — lazy load + implicit concurrency cap.
  * - Relay hints from the ref are captured; routing them is a follow-up (queries
