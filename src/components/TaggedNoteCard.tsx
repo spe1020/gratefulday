@@ -40,8 +40,10 @@ import { Nip10ReplySection } from '@/components/Nip10ReplySection';
  * "replying to @rootAuthor →" affordance shown when the feed note is itself a
  * reply (gratitude in conversation). Resolves the thread root, fetches it via
  * the shared embed hook to name its author, and links to the root's nevent
- * page. Renders nothing for a non-reply note; degrades to a generic "a thread"
- * link (never a dead click) when the root can't be fetched.
+ * page. Renders nothing for a non-reply note. While loading or when the root is
+ * unfetchable it still links (generic "a thread"); only if the root id can't be
+ * NIP-19 encoded (rare) does it fall back to plain text — so there is no broken
+ * link, though in that one case there is no link at all.
  */
 function ReplyingToLink({ note }: { note: NostrEvent }) {
   const root = useMemo(() => resolveThreadRoot(note), [note]);
