@@ -5,12 +5,47 @@
  * structurally reachable only from TaggedNoteCard; the 36669 journal card uses
  * the NIP-22 (kind 1111) stack instead.
  *
- * The feed only ever shows TOP-LEVEL notes (filterTaggedNotes drops anything
- * with an `e` tag), so every target here is itself a thread root, and a direct
- * reply uses a SINGLE `e` tag marked "root".
+ * The feed now surfaces gratitude-tagged REPLIES too, so a target here may be a
+ * root OR a reply. `resolveThreadRoot` tells them apart, and the composer emits
+ * a single "root" marker for a root target but "root" + "reply" markers for a
+ * reply target (see buildNip10ReplyTags).
  */
 
 import type { NostrEvent } from '@nostrify/nostrify';
+
+const MARKERS: ReadonlySet<string> = new Set(['root', 'reply', 'mention']);
+
+export interface ThreadRoot {
+  /** Event id of the thread root. */
+  id: string;
+  /** Root author pubkey hint, if the `e` tag carried one (slot 4). */
+  pubkey?: string;
+  /** Relay hint, if the `e` tag carried one (slot 2). */
+  relayHint?: string;
+}
+
+/**
+ * The thread root of a kind-1 note, from its NIP-10 `e` tags, or null if the
+ * note is itself a root (no `e` tags). Priority: `root` marker → `reply` marker
+ * (a reply-only note's parent is effectively the root) → positional (the FIRST
+ * `e` tag is the root in the legacy unmarked scheme). Pure + testable.
+ */
+export function resolveThreadRoot(note: NostrEvent): ThreadRoot | null {
+  const es = note.tags.filter(([name]) => name === 'e');
+  if (es.length === 0) return null;
+
+  const anyMarked = es.some((tag) => MARKERS.has(tag[3]));
+  if (anyMarked) {
+    const root = es.find((tag) => tag[3] === 'root') ?? es.find((tag) => tag[3] === 'reply');
+    if (!root) return null; // only mentions — not a reply to anything
+    return { id: root[1], relayHint: root[2] || undefined, pubkey: root[4] || undefined };
+  }
+
+  // Legacy positional/unmarked: the FIRST `e` tag is the root (slot 3 may be a
+  // pubkey hint in the 4-field form).
+  const first = es[0];
+  return { id: first[1], relayHint: first[2] || undefined, pubkey: first[3] || undefined };
+}
 
 /**
  * Tags for a direct kind-1 reply to `root`:

@@ -45,7 +45,10 @@ describe('mergeFeedEvents', () => {
     const tagged = [
       taggedNote('keep', 250, 'alice'),
       taggedNote('muted', 240, 'troll'),
-      { ...taggedNote('reply', 230), tags: [['t', 'grateful'], ['e', 'parent']] },
+      // A gratitude-tagged reply now qualifies (gratitude in conversation)...
+      { ...taggedNote('tagged-reply', 235), tags: [['t', 'grateful'], ['e', 'parent']] },
+      // ...but an untagged reply still drops.
+      { ...taggedNote('untagged-reply', 230), tags: [['e', 'parent']] },
       taggedNote('hidden', 220, 'alice'),
     ];
 
@@ -53,8 +56,8 @@ describe('mergeFeedEvents', () => {
       mutedPubkeys: new Set(['troll']),
       hiddenIds: new Set(['hidden']),
     });
-    // troll (muted), reply, and hidden are dropped; journal + keep remain.
-    expect(merged.map((e) => e.id)).toEqual(['a', 'keep']);
+    // troll (muted), untagged-reply, and hidden drop; journal + keep + tagged-reply remain.
+    expect(merged.map((e) => e.id)).toEqual(['a', 'keep', 'tagged-reply']);
   });
 
   it('does not apply the kind-1 mute path to journal authors', () => {

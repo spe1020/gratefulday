@@ -1,19 +1,11 @@
 import { useNostr } from '@nostrify/react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import type { NostrEvent } from '@nostrify/nostrify';
+import { TAGGED_HASHTAGS } from '@/lib/taggedFeedUtils';
 
-/**
- * Open-network gratitude / faith hashtags the feed surfaces. Single source of
- * truth — the relay query and the filter chips both derive from this list.
- */
-export const TAGGED_HASHTAGS = [
-  'grateful',
-  'gratefulchain',
-  'thankful',
-  'blessed',
-  'faithstr',
-  'biblestr',
-] as const;
+// TAGGED_HASHTAGS lives in taggedFeedUtils (the single source of truth shared
+// by root + reply qualification); re-exported here for existing importers.
+export { TAGGED_HASHTAGS };
 
 /** Which hashtag(s) to surface: every tag ('all') or a single one. */
 export type TaggedFilter = 'all' | (typeof TAGGED_HASHTAGS)[number];

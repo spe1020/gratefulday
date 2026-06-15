@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { NostrEvent } from '@nostrify/nostrify';
-import { buildNip10ReplyTags, isNip10Reply } from './nip10';
+import { buildNip10ReplyTags, isNip10Reply, resolveThreadRoot } from './nip10';
 
 function rootNote(overrides: Partial<NostrEvent> = {}): NostrEvent {
   return {
@@ -84,5 +84,44 @@ describe('isNip10Reply', () => {
 
   it('rejects a note with no e tags', () => {
     expect(isNip10Reply(rootNote({ id: 'top' }), ROOT)).toBe(false);
+  });
+});
+
+describe('resolveThreadRoot', () => {
+  it('returns null for a note that is itself a root (no e tags)', () => {
+    expect(resolveThreadRoot(rootNote())).toBeNull();
+  });
+
+  it('prefers the root marker, with pubkey + relay hints', () => {
+    const reply = rootNote({
+      tags: [
+        ['e', 'the-root', 'wss://relay', 'root', 'root-author'],
+        ['e', 'the-parent', '', 'reply', 'parent-author'],
+      ],
+    });
+    expect(resolveThreadRoot(reply)).toEqual({
+      id: 'the-root',
+      relayHint: 'wss://relay',
+      pubkey: 'root-author',
+    });
+  });
+
+  it('falls back to the reply marker when there is no root marker', () => {
+    const reply = rootNote({ tags: [['e', 'the-parent', '', 'reply', 'parent-author']] });
+    expect(resolveThreadRoot(reply)).toEqual({ id: 'the-parent', pubkey: 'parent-author' });
+  });
+
+  it('uses the FIRST e tag in the legacy unmarked (positional) scheme', () => {
+    const reply = rootNote({ tags: [['e', 'positional-root'], ['e', 'positional-parent']] });
+    expect(resolveThreadRoot(reply)).toEqual({ id: 'positional-root' });
+  });
+
+  it('reads a pubkey hint from the legacy 4-field positional form', () => {
+    const reply = rootNote({ tags: [['e', 'root', 'wss://r', 'root-pubkey']] });
+    expect(resolveThreadRoot(reply)).toEqual({ id: 'root', relayHint: 'wss://r', pubkey: 'root-pubkey' });
+  });
+
+  it('returns null when the only e tags are mentions (not a reply)', () => {
+    expect(resolveThreadRoot(rootNote({ tags: [['e', 'x', '', 'mention']] }))).toBeNull();
   });
 });
