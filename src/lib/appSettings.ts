@@ -33,6 +33,11 @@ export interface AppSettings {
   privacyDefault?: boolean;
   /** Streak milestones (7+) already celebrated. Day-1 is never stored here. */
   celebratedMilestones: number[];
+  /**
+   * Unix seconds of the last time notifications were marked seen. Notifications
+   * newer than this are unread. Merged with MAX so read-state never regresses.
+   */
+  lastSeenNotifications?: number;
 }
 
 /** An empty, never-null settings object. */
@@ -59,12 +64,20 @@ function unionSorted(a: number[], b: number[]): number[] {
  *   every celebration that any device has ever seen.
  */
 export function reconcile(local: AppSettings, remote: AppSettings | null): AppSettings {
+  // lastSeenNotifications merges with MAX (like celebratedMilestones unions):
+  // read-state is monotonic, so a slightly-older-timestamped device sync must
+  // never roll it back and re-show already-seen notifications.
+  const lastSeen = Math.max(
+    local.lastSeenNotifications ?? 0,
+    remote?.lastSeenNotifications ?? 0
+  );
   return {
     privacyDefault: remote?.privacyDefault ?? local.privacyDefault,
     celebratedMilestones: unionSorted(
       local.celebratedMilestones,
       remote?.celebratedMilestones ?? []
     ),
+    lastSeenNotifications: lastSeen || undefined,
   };
 }
 
@@ -75,7 +88,11 @@ export function reconcile(local: AppSettings, remote: AppSettings | null): AppSe
  */
 export function needsSeed(remoteExists: boolean, local: AppSettings): boolean {
   if (remoteExists) return false;
-  return local.privacyDefault !== undefined || local.celebratedMilestones.length > 0;
+  return (
+    local.privacyDefault !== undefined ||
+    local.celebratedMilestones.length > 0 ||
+    local.lastSeenNotifications !== undefined
+  );
 }
 
 export function serializeSettings(settings: AppSettings): string {
@@ -83,6 +100,7 @@ export function serializeSettings(settings: AppSettings): string {
     version: SETTINGS_VERSION,
     privacyDefault: settings.privacyDefault,
     celebratedMilestones: unionSorted(settings.celebratedMilestones, []),
+    lastSeenNotifications: settings.lastSeenNotifications,
   });
 }
 
@@ -96,7 +114,13 @@ export function parseSettings(json: string): AppSettings {
     const celebratedMilestones = Array.isArray(parsed.celebratedMilestones)
       ? parsed.celebratedMilestones.filter((m: unknown): m is number => typeof m === 'number')
       : [];
-    return { privacyDefault, celebratedMilestones: unionSorted(celebratedMilestones, []) };
+    const lastSeenNotifications =
+      typeof parsed.lastSeenNotifications === 'number' ? parsed.lastSeenNotifications : undefined;
+    return {
+      privacyDefault,
+      celebratedMilestones: unionSorted(celebratedMilestones, []),
+      lastSeenNotifications,
+    };
   } catch {
     return emptySettings();
   }
@@ -157,24 +181,25 @@ export function buildSettingsEvent(ciphertext: string): {
 // existing key. Both stay as the cache layer behind `useAppSettings`.
 
 const PRIVACY_DEFAULT_KEY = 'gratefulday:privacy-default:v1';
+const LAST_SEEN_KEY = 'gratefulday:last-seen-notifications:v1';
 
-function readPrivacyMap(): Record<string, boolean> {
+function readMap<T>(key: string): Record<string, T> {
   try {
-    const raw = localStorage.getItem(PRIVACY_DEFAULT_KEY);
+    const raw = localStorage.getItem(key);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
-    // Reject non-objects AND arrays: writing `privacyMap[pubkey] = ...` onto an
-    // array then JSON.stringify-ing it drops the write, so a corrupt `'[]'`
-    // would stop the privacy default from ever persisting.
+    // Reject non-objects AND arrays: writing `map[pubkey] = ...` onto an array
+    // then JSON.stringify-ing it drops the write, so a corrupt `'[]'` would stop
+    // the value from ever persisting.
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
 }
 
-function writePrivacyMap(map: Record<string, boolean>): void {
+function writeMap(key: string, map: Record<string, unknown>): void {
   try {
-    localStorage.setItem(PRIVACY_DEFAULT_KEY, JSON.stringify(map));
+    localStorage.setItem(key, JSON.stringify(map));
   } catch {
     // localStorage unavailable (private mode, quota) — relay remains the
     // durable store; the cache just won't persist this session.
@@ -183,22 +208,29 @@ function writePrivacyMap(map: Record<string, boolean>): void {
 
 /** Read the local cache for a pubkey. Day-1 (`1`) is filtered out — never stored. */
 export function readLocalCache(pubkey: string): AppSettings {
-  const privacy = readPrivacyMap()[pubkey];
+  const privacy = readMap<boolean>(PRIVACY_DEFAULT_KEY)[pubkey];
+  const lastSeen = readMap<number>(LAST_SEEN_KEY)[pubkey];
   return {
     privacyDefault: typeof privacy === 'boolean' ? privacy : undefined,
     celebratedMilestones: unionSorted(
       getCelebratedMilestones(pubkey).filter((m) => m > 1),
       []
     ),
+    lastSeenNotifications: typeof lastSeen === 'number' ? lastSeen : undefined,
   };
 }
 
 /** Write-through the cache for a pubkey, preserving other pubkeys' entries. */
 export function writeLocalCache(pubkey: string, settings: AppSettings): void {
   if (settings.privacyDefault !== undefined) {
-    const privacyMap = readPrivacyMap();
+    const privacyMap = readMap<boolean>(PRIVACY_DEFAULT_KEY);
     privacyMap[pubkey] = settings.privacyDefault;
-    writePrivacyMap(privacyMap);
+    writeMap(PRIVACY_DEFAULT_KEY, privacyMap);
+  }
+  if (settings.lastSeenNotifications !== undefined) {
+    const lastSeenMap = readMap<number>(LAST_SEEN_KEY);
+    lastSeenMap[pubkey] = settings.lastSeenNotifications;
+    writeMap(LAST_SEEN_KEY, lastSeenMap);
   }
   setCelebratedMilestones(pubkey, settings.celebratedMilestones.filter((m) => m > 1));
 }
