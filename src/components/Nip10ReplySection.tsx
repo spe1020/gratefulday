@@ -53,7 +53,7 @@ export function Nip10ReplySection({ root }: { root: NostrEvent }) {
     const content = text.trim();
     if (!content) return;
     postReply(
-      { root, content },
+      { target: root, content },
       {
         onSuccess: () => {
           setText('');

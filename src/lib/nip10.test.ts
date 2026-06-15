@@ -44,6 +44,42 @@ describe('buildNip10ReplyTags', () => {
     const eTag = buildNip10ReplyTags(rootNote()).find(([n]) => n === 'e');
     expect(eTag?.[2]).toBe('');
   });
+
+  it('replying to a REPLY emits root + reply markers, preserving the thread root', () => {
+    // The target is itself a reply: root marker → THE_ROOT, reply marker → target.
+    const target = rootNote({
+      id: 'target-id',
+      pubkey: 'target-author',
+      tags: [
+        ['t', 'grateful'],
+        ['e', 'THE_ROOT', 'wss://r', 'root', 'root-author'],
+        ['p', 'someone'],
+      ],
+    });
+    const tags = buildNip10ReplyTags(target, 'wss://hint');
+    const eTags = tags.filter(([n]) => n === 'e');
+
+    expect(eTags).toContainEqual(['e', 'THE_ROOT', 'wss://r', 'root', 'root-author']);
+    expect(eTags).toContainEqual(['e', 'target-id', 'wss://hint', 'reply', 'target-author']);
+    expect(eTags).toHaveLength(2);
+    // exactly one root + one reply marker
+    expect(eTags.filter((t) => t[3] === 'root')).toHaveLength(1);
+    expect(eTags.filter((t) => t[3] === 'reply')).toHaveLength(1);
+
+    // p tags union the chain: target's p + target author + root author.
+    const pTags = tags.filter(([n]) => n === 'p').map(([, v]) => v).sort();
+    expect(pTags).toEqual(['root-author', 'someone', 'target-author']);
+  });
+
+  it('omits the root pubkey hint when the thread root carries none (still valid 4-field)', () => {
+    const target = rootNote({
+      id: 'target-id',
+      pubkey: 'target-author',
+      tags: [['t', 'grateful'], ['e', 'THE_ROOT']], // positional root, no pubkey hint
+    });
+    const rootMarker = buildNip10ReplyTags(target).find((t) => t[3] === 'root');
+    expect(rootMarker).toEqual(['e', 'THE_ROOT', '', 'root']); // 4 fields, no empty pubkey slot
+  });
 });
 
 describe('isNip10Reply', () => {

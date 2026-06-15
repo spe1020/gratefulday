@@ -47,22 +47,42 @@ export function resolveThreadRoot(note: NostrEvent): ThreadRoot | null {
   return { id: first[1], relayHint: first[2] || undefined, pubkey: first[3] || undefined };
 }
 
+/** An `e` tag with the author pubkey hint only when known (pubkey slot is optional). */
+function eTag(id: string, relay: string, marker: string, pubkey?: string): string[] {
+  return pubkey ? ['e', id, relay, marker, pubkey] : ['e', id, relay, marker];
+}
+
 /**
- * Tags for a direct kind-1 reply to `root`:
- * - one marked `e`: `["e", root.id, <relay>, "root", root.pubkey]` (NIP-10:
- *   "A direct reply to the root of a thread should have a single marked 'e' tag
- *   of type 'root'.")
- * - `p` tags: all of the root's `p` tags PLUS the root author's pubkey, deduped
- *   (NIP-10: notify thread participants + the author being replied to).
+ * Tags for a kind-1 reply to `target`. The target may itself be a reply now
+ * that gratitude-tagged replies appear in the feed, so the markers depend on
+ * the target's own shape (resolved via `resolveThreadRoot`):
+ *
+ * - target is a ROOT → a single `e` marked "root" (NIP-10: "A direct reply to
+ *   the root should have a single marked 'e' tag of type 'root'.").
+ * - target is itself a REPLY → TWO `e` tags: "root" → the thread root (so the
+ *   new reply stays under the same thread in other clients), "reply" → the
+ *   immediate target.
+ *
+ * `p` tags union the whole chain: the target's `p` tags + the target author +
+ * the thread root author (deduped) — NIP-10: notify everyone involved.
  */
-export function buildNip10ReplyTags(root: NostrEvent, relayHint = ''): string[][] {
-  const tags: string[][] = [['e', root.id, relayHint, 'root', root.pubkey]];
+export function buildNip10ReplyTags(target: NostrEvent, relayHint = ''): string[][] {
+  const threadRoot = resolveThreadRoot(target);
+  const tags: string[][] = [];
+
+  if (threadRoot) {
+    tags.push(eTag(threadRoot.id, threadRoot.relayHint ?? '', 'root', threadRoot.pubkey));
+    tags.push(eTag(target.id, relayHint, 'reply', target.pubkey));
+  } else {
+    tags.push(eTag(target.id, relayHint, 'root', target.pubkey));
+  }
 
   const participants = new Set<string>();
-  for (const [name, value] of root.tags) {
+  for (const [name, value] of target.tags) {
     if (name === 'p' && value) participants.add(value);
   }
-  participants.add(root.pubkey); // the author being replied to
+  participants.add(target.pubkey); // the author being replied to
+  if (threadRoot?.pubkey) participants.add(threadRoot.pubkey); // the root author
 
   for (const pubkey of participants) tags.push(['p', pubkey]);
   return tags;
