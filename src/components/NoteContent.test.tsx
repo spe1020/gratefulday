@@ -1,8 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import { nip19 } from 'nostr-tools';
 import { TestApp } from '@/test/TestApp';
 import { NoteContent } from './NoteContent';
 import type { NostrEvent } from '@nostrify/nostrify';
+
+const NEVENT = nip19.neventEncode({ id: 'a'.repeat(64) });
+const NADDR = nip19.naddrEncode({ kind: 30023, pubkey: 'b'.repeat(64), identifier: 'slug' });
+const NPROFILE = nip19.nprofileEncode({ pubkey: 'c'.repeat(64) });
 
 function noteWith(content: string): NostrEvent {
   return {
@@ -183,6 +188,49 @@ describe('NoteContent', () => {
       screen.getByRole('link', { name: 'https://host.example/broken.png' })
     ).toBeInTheDocument();
     expect(container.querySelector('img')).not.toBeInTheDocument();
+  });
+
+  it('renders a note reference (nevent) as an embedded card, not a raw link, at depth 0', () => {
+    render(
+      <TestApp>
+        <NoteContent event={noteWith(`quote nostr:${NEVENT}`)} />
+      </TestApp>
+    );
+    // The raw ref text must not appear as a plain link — it's an embedded card.
+    expect(screen.queryByText(`nostr:${NEVENT}`)).not.toBeInTheDocument();
+  });
+
+  it('depth-1 guard: a nostr ref inside an embedded note renders as a plain link, not a card', () => {
+    render(
+      <TestApp>
+        <NoteContent event={noteWith(`inner nostr:${NEVENT}`)} depth={1} />
+      </TestApp>
+    );
+    const link = screen.getByRole('link', { name: `nostr:${NEVENT}` });
+    expect(link).toHaveAttribute('href', `/${NEVENT}`);
+  });
+
+  it('depth-1 guard also applies to naddr refs (now matched by the parser)', () => {
+    render(
+      <TestApp>
+        <NoteContent event={noteWith(`inner nostr:${NADDR}`)} depth={1} />
+      </TestApp>
+    );
+    expect(screen.getByRole('link', { name: `nostr:${NADDR}` })).toHaveAttribute(
+      'href',
+      `/${NADDR}`
+    );
+  });
+
+  it('renders an nprofile reference as a profile chip (not a plain ref link)', () => {
+    render(
+      <TestApp>
+        <NoteContent event={noteWith(`hi nostr:${NPROFILE}`)} />
+      </TestApp>
+    );
+    const chip = screen.getByRole('link');
+    expect(chip.textContent?.startsWith('@')).toBe(true); // mention chip, not raw ref
+    expect(chip.getAttribute('href')).toContain('/npub1');
   });
 
   it('generates deterministic names for users without metadata and styles them differently', () => {
