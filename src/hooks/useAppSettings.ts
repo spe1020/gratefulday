@@ -142,6 +142,8 @@ export function useAppSettings(): UseAppSettingsResult {
             settings.lastSeenNotifications ?? 0,
             patch.lastSeenNotifications ?? 0
           ) || undefined,
+        // giftDefaultAmount overwrites (last-write-wins; a current preference).
+        giftDefaultAmount: patch.giftDefaultAmount ?? settings.giftDefaultAmount,
       };
       writeLocalCache(pubkey, next);
       setLocalCache(next);

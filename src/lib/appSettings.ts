@@ -38,6 +38,12 @@ export interface AppSettings {
    * newer than this are unread. Merged with MAX so read-state never regresses.
    */
   lastSeenNotifications?: number;
+  /**
+   * Preset gift amount (sats) that arms the one-tap gratitude gift. UNDEFINED
+   * until the user explicitly opts in — one-tap never fires without it, so a
+   * tap can't silently spend. Last-write-wins (a current preference).
+   */
+  giftDefaultAmount?: number;
 }
 
 /** An empty, never-null settings object. */
@@ -78,6 +84,9 @@ export function reconcile(local: AppSettings, remote: AppSettings | null): AppSe
       remote?.celebratedMilestones ?? []
     ),
     lastSeenNotifications: lastSeen || undefined,
+    // Last-write-wins (a current preference, not monotonic): remote — the
+    // latest write across devices — wins when present, else keep local.
+    giftDefaultAmount: remote?.giftDefaultAmount ?? local.giftDefaultAmount,
   };
 }
 
@@ -91,7 +100,8 @@ export function needsSeed(remoteExists: boolean, local: AppSettings): boolean {
   return (
     local.privacyDefault !== undefined ||
     local.celebratedMilestones.length > 0 ||
-    local.lastSeenNotifications !== undefined
+    local.lastSeenNotifications !== undefined ||
+    local.giftDefaultAmount !== undefined
   );
 }
 
@@ -101,6 +111,7 @@ export function serializeSettings(settings: AppSettings): string {
     privacyDefault: settings.privacyDefault,
     celebratedMilestones: unionSorted(settings.celebratedMilestones, []),
     lastSeenNotifications: settings.lastSeenNotifications,
+    giftDefaultAmount: settings.giftDefaultAmount,
   });
 }
 
@@ -116,10 +127,15 @@ export function parseSettings(json: string): AppSettings {
       : [];
     const lastSeenNotifications =
       typeof parsed.lastSeenNotifications === 'number' ? parsed.lastSeenNotifications : undefined;
+    const giftDefaultAmount =
+      typeof parsed.giftDefaultAmount === 'number' && parsed.giftDefaultAmount > 0
+        ? parsed.giftDefaultAmount
+        : undefined;
     return {
       privacyDefault,
       celebratedMilestones: unionSorted(celebratedMilestones, []),
       lastSeenNotifications,
+      giftDefaultAmount,
     };
   } catch {
     return emptySettings();
@@ -182,6 +198,7 @@ export function buildSettingsEvent(ciphertext: string): {
 
 const PRIVACY_DEFAULT_KEY = 'gratefulday:privacy-default:v1';
 const LAST_SEEN_KEY = 'gratefulday:last-seen-notifications:v1';
+const GIFT_DEFAULT_KEY = 'gratefulday:gift-default-amount:v1';
 
 function readMap<T>(key: string): Record<string, T> {
   try {
@@ -210,6 +227,7 @@ function writeMap(key: string, map: Record<string, unknown>): void {
 export function readLocalCache(pubkey: string): AppSettings {
   const privacy = readMap<boolean>(PRIVACY_DEFAULT_KEY)[pubkey];
   const lastSeen = readMap<number>(LAST_SEEN_KEY)[pubkey];
+  const giftAmount = readMap<number>(GIFT_DEFAULT_KEY)[pubkey];
   return {
     privacyDefault: typeof privacy === 'boolean' ? privacy : undefined,
     celebratedMilestones: unionSorted(
@@ -217,6 +235,7 @@ export function readLocalCache(pubkey: string): AppSettings {
       []
     ),
     lastSeenNotifications: typeof lastSeen === 'number' ? lastSeen : undefined,
+    giftDefaultAmount: typeof giftAmount === 'number' && giftAmount > 0 ? giftAmount : undefined,
   };
 }
 
@@ -231,6 +250,11 @@ export function writeLocalCache(pubkey: string, settings: AppSettings): void {
     const lastSeenMap = readMap<number>(LAST_SEEN_KEY);
     lastSeenMap[pubkey] = settings.lastSeenNotifications;
     writeMap(LAST_SEEN_KEY, lastSeenMap);
+  }
+  if (settings.giftDefaultAmount !== undefined) {
+    const giftMap = readMap<number>(GIFT_DEFAULT_KEY);
+    giftMap[pubkey] = settings.giftDefaultAmount;
+    writeMap(GIFT_DEFAULT_KEY, giftMap);
   }
   setCelebratedMilestones(pubkey, settings.celebratedMilestones.filter((m) => m > 1));
 }

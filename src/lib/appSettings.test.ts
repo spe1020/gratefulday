@@ -69,6 +69,12 @@ describe('serialize / parse', () => {
     expect(parseSettings('{"celebratedMilestones":[],"lastSeenNotifications":"x"}').lastSeenNotifications).toBeUndefined();
   });
 
+  it('round-trips giftDefaultAmount and drops non-positive / non-number values', () => {
+    expect(parseSettings(serializeSettings({ celebratedMilestones: [], giftDefaultAmount: 21 })).giftDefaultAmount).toBe(21);
+    expect(parseSettings('{"celebratedMilestones":[],"giftDefaultAmount":0}').giftDefaultAmount).toBeUndefined();
+    expect(parseSettings('{"celebratedMilestones":[],"giftDefaultAmount":"x"}').giftDefaultAmount).toBeUndefined();
+  });
+
   it('degrades a corrupt or alien payload to empty', () => {
     expect(parseSettings('not json')).toEqual(emptySettings());
     expect(parseSettings('null')).toEqual(emptySettings());
@@ -122,6 +128,19 @@ describe('reconcile — deliberate asymmetry', () => {
     expect(
       reconcile({ celebratedMilestones: [] }, null).lastSeenNotifications
     ).toBeUndefined();
+  });
+
+  it('giftDefaultAmount is last-write-wins (remote overrides local when present)', () => {
+    expect(
+      reconcile(
+        { celebratedMilestones: [], giftDefaultAmount: 21 },
+        { celebratedMilestones: [], giftDefaultAmount: 100 }
+      ).giftDefaultAmount
+    ).toBe(100);
+    // no remote → keep local
+    expect(
+      reconcile({ celebratedMilestones: [], giftDefaultAmount: 21 }, null).giftDefaultAmount
+    ).toBe(21);
   });
 });
 
