@@ -14,10 +14,13 @@ import { useNotifications } from '@/hooks/useNotifications';
 import { NotificationsView } from '@/components/NotificationsView';
 
 /**
- * Header bell with an unread badge. Opens a sheet listing grouped notifications
- * (reactions, zaps, comments/replies on the user's gratitude). Opening the sheet
- * marks everything seen (NIP-78 `lastSeenNotifications = now`, synced + fail-
- * soft), so the badge clears. Hidden when logged out.
+ * Header bell with an unread badge. Opens a right-side sheet listing grouped
+ * notifications (reactions, zaps, comments/replies on the user's gratitude).
+ *
+ * The panel is positioned BELOW the sticky app header (which is z-[100], above
+ * the sheet's z-50) — otherwise the header would clip the panel's top, hiding
+ * its title bar and first row. "Mark all read" sets NIP-78 `lastSeenNotifications
+ * = now` (synced, fail-soft) → the badge clears. Hidden when logged out.
  */
 export function NotificationBell() {
   const { user } = useCurrentUser();
@@ -26,14 +29,8 @@ export function NotificationBell() {
 
   if (!user) return null;
 
-  const onOpenChange = (next: boolean) => {
-    setOpen(next);
-    // Only write when there's something new — avoids a needless NIP-78 publish.
-    if (next && unread > 0) markAllRead();
-  };
-
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
         <Button variant="ghost" size="icon" className="relative h-9 w-9" aria-label="Notifications">
           <Bell className="h-5 w-5" />
@@ -47,11 +44,27 @@ export function NotificationBell() {
           )}
         </Button>
       </SheetTrigger>
-      <SheetContent side="right" className="w-[340px] sm:w-[400px] p-0 flex flex-col">
-        <SheetHeader className="px-4 py-4 border-b">
+      {/* Pin below the app header (h-[88/96/104]); !top beats the variant's
+          inset-y-0, h-auto lets top+bottom-0 size it, so the list scrolls from
+          the first item. Mobile keeps the full available height below the header. */}
+      <SheetContent
+        side="right"
+        className="flex flex-col gap-0 p-0 w-[340px] sm:w-[400px] h-auto !top-[88px] sm:!top-[96px] md:!top-[104px]"
+      >
+        <SheetHeader className="flex-row items-center justify-between space-y-0 px-4 py-3 border-b shrink-0">
           <SheetTitle>Notifications</SheetTitle>
+          {unread > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => markAllRead()}
+              className="h-auto px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+            >
+              Mark all read
+            </Button>
+          )}
         </SheetHeader>
-        <ScrollArea className="flex-1">
+        <ScrollArea className="flex-1 min-h-0">
           <div className="p-2">
             <NotificationsView
               groups={groups}

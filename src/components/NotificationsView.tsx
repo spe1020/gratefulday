@@ -43,8 +43,11 @@ function truncate(text: string, max = 80): string {
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
-/** Public-only summary of what the actor(s) did — never the target note's body. */
-function describeAction(group: NotificationGroup): string {
+/**
+ * Public-only verb phrase for what the actor(s) did — never the target body.
+ * Reads as "{actor} {verb} to {target}", so each ends without the preposition.
+ */
+function actionVerb(group: NotificationGroup): string {
   switch (group.type) {
     case 'reaction': {
       const emojis = [...new Set(group.items.map((i) => i.emoji).filter(Boolean))].join('');
@@ -52,13 +55,20 @@ function describeAction(group: NotificationGroup): string {
     }
     case 'zap': {
       const sats = group.items.reduce((sum, i) => sum + (i.amountSats ?? 0), 0);
-      return sats > 0 ? `zapped ${sats.toLocaleString()} sats` : 'zapped you';
+      return sats > 0 ? `zapped ${sats.toLocaleString()} sats` : 'sent a zap';
     }
     case 'comment':
-      return `commented: "${truncate(group.items[0].snippet ?? '')}"`;
+      return 'commented';
     case 'reply':
-      return `replied: "${truncate(group.items[0].snippet ?? '')}"`;
+      return 'replied';
   }
+}
+
+/** Quoted comment/reply text to show on a second line, or null. */
+function snippetOf(group: NotificationGroup): string | null {
+  if (group.type !== 'comment' && group.type !== 'reply') return null;
+  const text = truncate(group.items[0].snippet ?? '');
+  return text ? text : null;
 }
 
 function NotificationRow({
@@ -98,9 +108,14 @@ function NotificationRow({
       </Avatar>
       <div className="min-w-0 flex-1 text-sm">
         <p className="text-foreground/90 break-words">
-          <span className="font-semibold">{actorLabel}</span> {describeAction(group)}{' '}
+          <span className="font-semibold">{actorLabel}</span> {actionVerb(group)} to{' '}
           <span className="text-muted-foreground">{targetLabel(group.target)}</span>
         </p>
+        {snippetOf(group) && (
+          <p className="text-muted-foreground italic break-words line-clamp-2">
+            “{snippetOf(group)}”
+          </p>
+        )}
         <p className="text-xs text-muted-foreground">{timeAgo(group.latestAt)}</p>
       </div>
     </button>
