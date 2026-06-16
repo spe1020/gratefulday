@@ -44,12 +44,14 @@ export function NotificationBell() {
           )}
         </Button>
       </SheetTrigger>
-      {/* Pin below the app header (h-[88/96/104]); !top beats the variant's
-          inset-y-0, h-auto lets top+bottom-0 size it, so the list scrolls from
-          the first item. Mobile keeps the full available height below the header. */}
+      {/* Pin below the app header using the shared --header-h var (single source
+          of truth with the header's own height — they can't drift). !top beats
+          the variant's inset-y-0 top:0; h-auto lets top + bottom-0 size it, so
+          the list scrolls from the first item. Mobile keeps the full available
+          height below the header. */}
       <SheetContent
         side="right"
-        className="flex flex-col gap-0 p-0 w-[340px] sm:w-[400px] h-auto !top-[88px] sm:!top-[96px] md:!top-[104px]"
+        className="flex flex-col gap-0 p-0 w-[340px] sm:w-[400px] h-auto !top-[var(--header-h)]"
       >
         <SheetHeader className="flex-row items-center justify-between space-y-0 px-4 py-3 border-b shrink-0">
           <SheetTitle>Notifications</SheetTitle>
