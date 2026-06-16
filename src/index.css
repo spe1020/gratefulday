@@ -2,6 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Responsive --header-h (unlayered so it wins over the @layer base default).
+   Breakpoints match Tailwind sm/md; keep in sync with the header's own height. */
+@media (min-width: 640px) {
+  :root {
+    --header-h: 96px;
+  }
+}
+@media (min-width: 768px) {
+  :root {
+    --header-h: 104px;
+  }
+}
+
 @layer components {
   .brand {
     padding-left: 0;
@@ -33,6 +46,11 @@
 
 @layer base {
   :root {
+    /* Sticky app-header height — THE single source of truth. The header sets its
+       height to this and overlays (e.g. the notifications sheet) offset by it, so
+       they can't drift. Breakpoints match Tailwind's sm (640px) / md (768px). */
+    --header-h: 88px;
+
     /* Warm, calming color palette with amber, orange, and rose tones */
     --background: 30 40% 98%;
     --foreground: 20 10% 20%;
