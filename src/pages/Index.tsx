@@ -4,6 +4,7 @@ import { useHead } from '@unhead/react';
 import { CalendarView } from '@/components/CalendarView';
 import { CommunitySection } from '@/components/CommunitySection';
 import { NotificationBell } from '@/components/NotificationBell';
+import { GratitudeGiftButton } from '@/components/GratitudeGiftButton';
 import { LoginArea } from '@/components/auth/LoginArea';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -202,6 +203,7 @@ export default function Index() {
                     </SheetContent>
                   </Sheet>
                 )}
+                <GratitudeGiftButton onOpenModal={() => setGiftModalOpen(true)} />
                 <NotificationBell />
                 <LoginArea className="max-w-48 sm:max-w-60" />
               </div>

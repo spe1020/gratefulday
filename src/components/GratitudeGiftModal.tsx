@@ -9,9 +9,11 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { useGratitudeGift } from '@/hooks/useGratitudeGift';
+import { useAppSettings } from '@/hooks/useAppSettings';
 import { Loader2, Copy, Check, ExternalLink } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import QRCode from 'qrcode';
@@ -45,8 +47,10 @@ export function GratitudeGiftModal({ open, onOpenChange }: GratitudeGiftModalPro
     zapEndpoint: string;
     signedZapRequest: unknown;
   } | null>(null);
+  const [setAsDefault, setSetAsDefault] = useState(false);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const { sendGratitudeGift, verifyAndPublishPayment, isSending } = useGratitudeGift();
+  const { updateSettings } = useAppSettings();
   const { toast } = useToast();
 
   // Generate QR code when invoice is available
@@ -146,6 +150,12 @@ export function GratitudeGiftModal({ open, onOpenChange }: GratitudeGiftModalPro
       amount = parsed;
     } else {
       amount = selectedAmount;
+    }
+
+    // Arm one-tap with this concrete amount (last-write-wins via NIP-78). Only
+    // when a fixed amount is chosen — a "random" default can't drive one-tap.
+    if (setAsDefault && selectedAmount !== RANDOM_AMOUNT) {
+      updateSettings({ giftDefaultAmount: amount });
     }
 
     // Use custom message if provided, otherwise use default
@@ -319,11 +329,24 @@ export function GratitudeGiftModal({ open, onOpenChange }: GratitudeGiftModalPro
                   className="resize-none text-sm"
                 />
                 <p className="text-xs text-muted-foreground">
-                  {customMessage.trim() 
-                    ? 'Your custom message will be included with the gift.' 
+                  {customMessage.trim()
+                    ? 'Your custom message will be included with the gift.'
                     : 'Leave empty to use the default message.'}
                 </p>
               </div>
+
+              {/* Set as one-tap default — only for a fixed amount (not random) */}
+              {selectedAmount !== RANDOM_AMOUNT && (
+                <label className="flex items-center gap-2 pt-2 cursor-pointer">
+                  <Checkbox
+                    checked={setAsDefault}
+                    onCheckedChange={(c) => setSetAsDefault(c === true)}
+                  />
+                  <span className="text-sm text-foreground">
+                    Set as my default for one-tap gifts
+                  </span>
+                </label>
+              )}
 
               {/* Action buttons */}
               <div className="flex gap-3 justify-end pt-2">
