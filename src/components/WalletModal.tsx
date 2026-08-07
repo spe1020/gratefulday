@@ -255,7 +255,10 @@ export function WalletModal({ children, className }: WalletModalProps) {
   const { webln } = useWallet();
   const { config, updateConfig } = useAppContext();
 
-  const hasNWC = connections.length > 0 && connections.some(c => c.isConnected);
+  // `isConnected` reflects a live probe this session, not a stored fact — it is
+  // false for every connection restored from storage, so requiring it here
+  // would report "no wallet" after every reload for a perfectly good one.
+  const hasNWC = connections.length > 0;
   const { toast } = useToast();
 
   const handleWalletAppChange = (walletApp: WalletApp) => {
@@ -289,7 +292,20 @@ export function WalletModal({ children, className }: WalletModalProps) {
         setConnectionUri('');
         setAlias('');
         setAddDialogOpen(false);
+      } else {
+        toast({
+          title: 'Could not add wallet',
+          description: 'That connection URI was rejected. Check it and try again.',
+          variant: 'destructive',
+        });
       }
+    } catch (error) {
+      toast({
+        title: 'Could not add wallet',
+        description:
+          error instanceof Error ? error.message : 'Unexpected error adding the connection.',
+        variant: 'destructive',
+      });
     } finally {
       setIsConnecting(false);
     }
