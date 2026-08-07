@@ -2,7 +2,7 @@
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Shield, Upload, AlertTriangle, UserPlus, KeyRound, Sparkles, Cloud, Smartphone, Copy, Check, Loader2 } from 'lucide-react';
+import { Shield, Upload, AlertTriangle, UserPlus, KeyRound, Sparkles, Cloud, Smartphone, Loader2 } from 'lucide-react';
 import { useNostr } from '@nostrify/react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -49,7 +49,6 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
   const [nsec, setNsec] = useState('');
   const [bunkerUri, setBunkerUri] = useState('');
   const [amberSession, setAmberSession] = useState<NostrConnectSession | null>(null);
-  const [amberCopied, setAmberCopied] = useState(false);
   const [errors, setErrors] = useState<{
     nsec?: string;
     bunker?: string;
@@ -70,7 +69,6 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
       setNsec('');
       setBunkerUri('');
       setErrors({});
-      setAmberCopied(false);
       // Reset file input
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
@@ -103,6 +101,12 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
     });
     setAmberSession(session);
 
+    // Hand off to Amber in THIS click. startNostrConnect is synchronous, so the
+    // URI is ready now — and mobile browsers only allow navigating to a custom
+    // scheme from a real user gesture, so deferring it to an effect or a
+    // promise callback would get it blocked.
+    window.location.href = session.uri;
+
     session.established
       .then((loginObj) => {
         login.remote(loginObj);
@@ -120,17 +124,6 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
           amber: 'Could not complete the Amber connection. Please try again.',
         }));
       });
-  };
-
-  const handleAmberCopy = async () => {
-    if (!amberSession) return;
-    try {
-      await navigator.clipboard.writeText(amberSession.uri);
-      setAmberCopied(true);
-      setTimeout(() => setAmberCopied(false), 2000);
-    } catch {
-      // Clipboard unavailable — the link button still works.
-    }
   };
 
   const handleExtensionLogin = async () => {
@@ -328,17 +321,19 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
               </>
             ) : (
               <div className='space-y-2'>
-                <Button asChild className='w-full rounded-full bg-orange-500 hover:bg-orange-600 text-white'>
-                  <a href={amberSession.uri}>Open in Amber</a>
-                </Button>
-                <Button variant='outline' className='w-full rounded-full' onClick={handleAmberCopy}>
-                  {amberCopied ? <Check className='w-4 h-4 mr-2' /> : <Copy className='w-4 h-4 mr-2' />}
-                  {amberCopied ? 'Copied' : 'Copy connection link'}
-                </Button>
                 <p className='flex items-center justify-center gap-2 text-sm text-muted-foreground'>
                   <Loader2 className='w-4 h-4 animate-spin' />
                   Waiting for approval in Amber…
                 </p>
+                {/* Retry of the same hand-off, for when the deep link doesn't
+                    fire (Amber not installed, or a browser that swallowed it). */}
+                <button
+                  type='button'
+                  onClick={() => { window.location.href = amberSession.uri; }}
+                  className='w-full text-center text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground'
+                >
+                  Didn't open? Tap to try again
+                </button>
               </div>
             )}
           </MethodSection>
