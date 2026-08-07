@@ -476,11 +476,31 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     return `Encryption failed: ${error instanceof Error ? error.message : 'unknown error'}. ${reassure}`;
   };
 
+  /**
+   * Name the actual cause. A generic "please try again" is what makes a failed
+   * save undiagnosable: the app knows why it failed and the user has no way to
+   * find out.
+   */
   const describeSaveError = (error: unknown): string => {
+    const kept = 'Nothing was saved — your notes are still here.';
+
     if (error instanceof SignerTimeoutError) {
-      return 'Your signer did not respond — nothing was saved. Your notes are still here; check your signer app and try again.';
+      return `Your signer did not respond. ${kept} Check your signer app and try again.`;
     }
-    return 'Nothing was saved — your notes are still here. Please try again.';
+
+    // Publishing uses Promise.any across relays, so this only happens when
+    // EVERY relay rejected.
+    if (error instanceof AggregateError) {
+      const reason = error.errors
+        .map((e) => (e instanceof Error ? e.message : String(e)))
+        .find((m) => m && m.length > 0);
+      return `No relay accepted the entry${reason ? ` (${reason})` : ''}. ${kept} Check your relays and try again.`;
+    }
+
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    // Signer rejections surface here — "user rejected", an ungranted event
+    // kind — which is exactly what needs to reach the user.
+    return message ? `${message}. ${kept}` : `${kept} Please try again.`;
   };
 
   const handleSave = async () => {

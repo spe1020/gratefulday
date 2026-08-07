@@ -64,7 +64,15 @@ export function useNostrPublish(): UseMutationResult<NostrEvent> {
       }
     },
     onError: (error) => {
+      // Deliberately not gated behind DEV: a publish failure is diagnostic
+      // information, and hiding it in production leaves a user staring at
+      // "failed to save" with the reason recorded nowhere.
       console.error("Failed to publish event:", error);
+      if (error instanceof AggregateError) {
+        // Promise.any collects one reason per relay; without this only the
+        // opaque "All promises were rejected" is visible.
+        console.error("Relay rejections:", error.errors);
+      }
     },
     onSuccess: (data) => {
       console.log("Event published successfully:", data);
