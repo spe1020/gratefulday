@@ -14,9 +14,8 @@
  */
 
 import type { NostrEvent } from '@nostrify/nostrify';
-import { formatDateString } from '@/lib/gratitudeUtils';
-
-const DATE_STRING_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+import { formatDateString, isValidDateString } from '@/lib/gratitudeUtils';
+import { isEncryptedEntry } from '@/lib/privacyUtils';
 
 /** Public gratitude entries journaled for a single local-tz day. */
 export interface CommunityDayBucket {
@@ -36,10 +35,6 @@ export interface MonthGridCell {
   dateString: string;
 }
 
-function isEncryptedEntry(event: NostrEvent): boolean {
-  return event.tags.some(([name]) => name === 'encrypted');
-}
-
 /**
  * Group public entries into day buckets keyed by their `d` tag.
  *
@@ -54,24 +49,40 @@ export function groupEntriesByDay(
 
   const sorted = [...events].sort((a, b) => b.created_at - a.created_at);
 
+  // Relays that don't replace addressable events can hand back several
+  // versions of the same author's same-day entry; keep only the newest per
+  // pubkey+d (sorted newest-first, so first seen wins).
+  const seenAddress = new Set<string>();
+  const seenAuthors = new Map<string, Set<string>>();
+
   for (const event of sorted) {
     // Hard gate: ciphertext must never be grouped or surfaced publicly.
     if (isEncryptedEntry(event)) continue;
 
     const dTag = event.tags.find(([name]) => name === 'd')?.[1];
-    if (!dTag || !DATE_STRING_REGEX.test(dTag)) continue;
+    if (!dTag || !isValidDateString(dTag)) continue;
+
+    const address = `${event.pubkey}:${dTag}`;
+    if (seenAddress.has(address)) continue;
+    seenAddress.add(address);
 
     let bucket = buckets.get(dTag);
     if (!bucket) {
       bucket = { dateString: dTag, events: [], noteCount: 0, authorPubkeys: [] };
       buckets.set(dTag, bucket);
+      seenAuthors.set(dTag, new Set());
     }
 
     bucket.events.push(event);
-    bucket.noteCount = bucket.events.length;
-    if (!bucket.authorPubkeys.includes(event.pubkey)) {
+    const authors = seenAuthors.get(dTag)!;
+    if (!authors.has(event.pubkey)) {
+      authors.add(event.pubkey);
       bucket.authorPubkeys.push(event.pubkey);
     }
+  }
+
+  for (const bucket of buckets.values()) {
+    bucket.noteCount = bucket.events.length;
   }
 
   return buckets;

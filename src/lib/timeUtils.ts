@@ -1,6 +1,8 @@
 /**
  * Compact relative timestamp for note/card UIs: "now", "5m", "3h", "2d", then a
- * short "Mon D" date past a week. Shared by the feed cards and embedded-note
+ * short "Mon D" date past a week — with the year appended ("Jul 3, 2025") once
+ * the date's year differs from the current one, so a 13-month-old note isn't
+ * indistinguishable from this year's. Shared by the feed cards and embedded-note
  * cards so the formatting (and edge cases like a future `created_at`, which the
  * `< 60` branch renders as "now") stays consistent in one place.
  *
@@ -15,8 +17,10 @@ export function timeAgo(createdAt: number): string {
   if (hours < 24) return `${hours}h`;
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d`;
-  return new Date(createdAt * 1000).toLocaleDateString('en-US', {
+  const date = new Date(createdAt * 1000);
+  return date.toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
+    ...(date.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' as const } : {}),
   });
 }

@@ -79,10 +79,49 @@ describe('getEntryDateStrings', () => {
 
     expect(getEntryDateStrings(events)).toEqual(dates('2026-06-01'));
   });
+
+  it('excludes d tags that look like dates but cannot exist', () => {
+    // These pass a shape-only /^\d{4}-\d{2}-\d{2}$/ check. A hostile or buggy
+    // client publishing them would otherwise inflate `total` and milestone math.
+    const events = [
+      makeEvent('2026-06-01'),
+      makeEvent('2026-02-30'),
+      makeEvent('2026-13-01'),
+      makeEvent('2026-00-10'),
+      makeEvent('0000-00-00'),
+    ];
+
+    expect(getEntryDateStrings(events)).toEqual(dates('2026-06-01'));
+  });
 });
 
 describe('calculateStreaks', () => {
   const TODAY = '2026-06-09';
+
+  it('counts through a DST spring-forward without breaking the streak', () => {
+    // US DST begins 2026-03-08. Millisecond-based day stepping would skip or
+    // repeat a day here and split one streak into two.
+    const span = dates('2026-03-06', '2026-03-07', '2026-03-08', '2026-03-09', '2026-03-10');
+    const result = calculateStreaks(span, '2026-03-10');
+    expect(result.current).toBe(5);
+    expect(result.longest).toBe(5);
+  });
+
+  it('counts through a DST fall-back without breaking the streak', () => {
+    // US DST ends 2026-11-01 (a 25-hour local day).
+    const span = dates('2026-10-30', '2026-10-31', '2026-11-01', '2026-11-02');
+    const result = calculateStreaks(span, '2026-11-02');
+    expect(result.current).toBe(4);
+    expect(result.longest).toBe(4);
+  });
+
+  it('counts across a leap day and a year boundary', () => {
+    const leap = dates('2024-02-28', '2024-02-29', '2024-03-01');
+    expect(calculateStreaks(leap, '2024-03-01').current).toBe(3);
+
+    const newYear = dates('2025-12-30', '2025-12-31', '2026-01-01');
+    expect(calculateStreaks(newYear, '2026-01-01').current).toBe(3);
+  });
 
   it('returns zeros for an empty set', () => {
     expect(calculateStreaks(dates(), TODAY)).toEqual({

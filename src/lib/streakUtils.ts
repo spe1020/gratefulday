@@ -8,7 +8,7 @@
  */
 
 import type { NostrEvent } from '@nostrify/nostrify';
-import { formatDateString } from '@/lib/gratitudeUtils';
+import { formatDateString, isValidDateString } from '@/lib/gratitudeUtils';
 
 export interface StreakResult {
   current: number;
@@ -25,7 +25,6 @@ export const MILESTONES = [1, 7, 14, 30, 50, 100, 200, 365] as const;
 
 export type Milestone = (typeof MILESTONES)[number];
 
-const DATE_STRING_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * Dedupe addressable events by `d` tag, keeping the newest `created_at` per
@@ -50,14 +49,18 @@ export function dedupeEntriesByDTag(events: NostrEvent[]): NostrEvent[] {
 
 /**
  * Extract the set of unique YYYY-MM-DD date strings from entry events.
- * Invalid `d` tags (wrong format) are excluded.
+ * Invalid `d` tags (wrong format or impossible dates) are excluded. No
+ * dedupeEntriesByDTag pass needed — the Set collapses duplicate `d` tags, and
+ * which duplicate "wins" is irrelevant when only the date string is kept.
  */
 export function getEntryDateStrings(events: NostrEvent[]): Set<string> {
   const dates = new Set<string>();
 
-  for (const event of dedupeEntriesByDTag(events)) {
+  for (const event of events) {
     const dTag = event.tags.find(([name]) => name === 'd')?.[1];
-    if (dTag && DATE_STRING_REGEX.test(dTag)) {
+    // Semantic validation, not just shape: a hostile "2026-02-30" would
+    // otherwise inflate totals and milestone math.
+    if (dTag && isValidDateString(dTag)) {
       dates.add(dTag);
     }
   }

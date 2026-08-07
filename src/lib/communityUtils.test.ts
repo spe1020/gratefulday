@@ -106,6 +106,45 @@ describe('groupEntriesByDay', () => {
   });
 });
 
+describe('groupEntriesByDay — addressable dedup', () => {
+  it('keeps only the newest version of one author-day entry', () => {
+    // Relays that don't replace addressable events hand back both versions;
+    // counting both inflates noteCount and renders a duplicate card.
+    const buckets = groupEntriesByDay([
+      makeEvent({ dTag: '2026-06-01', pubkey: 'author-a', created_at: 100 }),
+      makeEvent({ dTag: '2026-06-01', pubkey: 'author-a', created_at: 500 }),
+    ]);
+
+    const bucket = buckets.get('2026-06-01')!;
+    expect(bucket.noteCount).toBe(1);
+    expect(bucket.events).toHaveLength(1);
+    expect(bucket.events[0].created_at).toBe(500);
+    expect(bucket.authorPubkeys).toEqual(['author-a']);
+  });
+
+  it('still keeps one entry per distinct author on the same day', () => {
+    const buckets = groupEntriesByDay([
+      makeEvent({ dTag: '2026-06-01', pubkey: 'author-a', created_at: 100 }),
+      makeEvent({ dTag: '2026-06-01', pubkey: 'author-a', created_at: 500 }),
+      makeEvent({ dTag: '2026-06-01', pubkey: 'author-b', created_at: 300 }),
+    ]);
+
+    const bucket = buckets.get('2026-06-01')!;
+    expect(bucket.noteCount).toBe(2);
+    expect(bucket.authorPubkeys).toEqual(['author-a', 'author-b']);
+  });
+
+  it('drops d tags that are shape-valid but impossible dates', () => {
+    const buckets = groupEntriesByDay([
+      makeEvent({ dTag: '2026-06-01' }),
+      makeEvent({ dTag: '2026-02-30', pubkey: 'author-b' }),
+      makeEvent({ dTag: '2026-13-01', pubkey: 'author-c' }),
+    ]);
+
+    expect([...buckets.keys()]).toEqual(['2026-06-01']);
+  });
+});
+
 describe('getMonthUnixBounds', () => {
   it('spans the first instant through the last instant of the month (local tz)', () => {
     const { since, until } = getMonthUnixBounds(2026, 5); // June 2026
@@ -139,5 +178,21 @@ describe('getMonthGrid', () => {
     // February 2026 starts on a Sunday (weekday 0).
     const cells = getMonthGrid(2026, 1);
     expect(cells[0]).toEqual({ day: 1, dateString: '2026-02-01' });
+  });
+
+  it('handles a 31-day month starting on Saturday (6 leading nulls, 37 cells)', () => {
+    // August 2026 starts on a Saturday — the widest grid a month can produce.
+    const cells = getMonthGrid(2026, 7);
+    expect(cells.slice(0, 6)).toEqual([null, null, null, null, null, null]);
+    expect(cells).toHaveLength(37);
+    expect(cells[6]).toEqual({ day: 1, dateString: '2026-08-01' });
+    expect(cells[36]).toEqual({ day: 31, dateString: '2026-08-31' });
+  });
+
+  it('spans a leap February without gaps', () => {
+    const cells = getMonthGrid(2024, 1);
+    const dayCells = cells.filter((c): c is NonNullable<typeof c> => c !== null);
+    expect(dayCells).toHaveLength(29);
+    expect(dayCells[28]).toEqual({ day: 29, dateString: '2024-02-29' });
   });
 });
