@@ -3,6 +3,11 @@ import { createRoot } from 'react-dom/client';
 // Import polyfills first
 import './lib/polyfills.ts';
 
+// Must run before any NIP-46 signer is used, so a signer's rejection surfaces
+// as its own message instead of a Zod schema error. See the module docstring.
+import { applyNip46ResponseCompat } from './lib/nip46Compat.ts';
+applyNip46ResponseCompat();
+
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import App from './App.tsx';
 import './index.css';
