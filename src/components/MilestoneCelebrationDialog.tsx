@@ -146,7 +146,7 @@ export function MilestoneCelebrationDialog() {
         if (!open) setMilestone(null);
       }}
     >
-      <DialogContent className="sm:max-w-[420px] overflow-hidden">
+      <DialogContent className="sm:max-w-[420px] overflow-x-hidden overflow-y-auto">
         {copy && milestone !== null && (
           <>
             {/* Confetti burst — same CSS-only pattern as TodayHero */}
