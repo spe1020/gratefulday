@@ -2,13 +2,14 @@
 // It is important that all functionality in this file is preserved, and should only be modified if explicitly requested.
 
 import React, { useRef, useState, useEffect } from 'react';
-import { Shield, Upload, AlertTriangle, UserPlus, KeyRound, Sparkles, Cloud } from 'lucide-react';
+import { Shield, Upload, AlertTriangle, UserPlus, KeyRound, Sparkles, Cloud, Smartphone, Copy, Check, Loader2 } from 'lucide-react';
+import { useNostr } from '@nostrify/react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogDescription } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useLoginActions } from '@/hooks/useLoginActions';
+import { startNostrConnect, type NostrConnectSession } from '@/lib/nostrConnect';
 import { cn } from '@/lib/utils';
 
 interface LoginDialogProps {
@@ -19,26 +20,46 @@ interface LoginDialogProps {
 }
 
 const validateNsec = (nsec: string) => {
-  return /^nsec1[a-zA-Z0-9]{58}$/.test(nsec);
+  // Strict bech32 charset: lowercase only, and no b/i/o/1 in the data part.
+  return /^nsec1[02-9ac-hj-np-z]{58}$/.test(nsec);
 };
 
 const validateBunkerUri = (uri: string) => {
   return uri.startsWith('bunker://');
 };
 
+/** Section wrapper so every login method reads as one card in a single list. */
+const MethodSection: React.FC<{
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+}> = ({ icon, title, children }) => (
+  <div className='rounded-xl border bg-muted/40 p-4 space-y-3'>
+    <div className='flex items-center gap-2 font-medium text-sm'>
+      {icon}
+      <span>{title}</span>
+    </div>
+    {children}
+  </div>
+);
+
 const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onSignup }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [isFileLoading, setIsFileLoading] = useState(false);
   const [nsec, setNsec] = useState('');
   const [bunkerUri, setBunkerUri] = useState('');
+  const [amberSession, setAmberSession] = useState<NostrConnectSession | null>(null);
+  const [amberCopied, setAmberCopied] = useState(false);
   const [errors, setErrors] = useState<{
     nsec?: string;
     bunker?: string;
     file?: string;
     extension?: string;
+    amber?: string;
   }>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const login = useLoginActions();
+  const { nostr } = useNostr();
 
   // Reset all state when dialog opens/closes
   useEffect(() => {
@@ -49,12 +70,68 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
       setNsec('');
       setBunkerUri('');
       setErrors({});
+      setAmberCopied(false);
       // Reset file input
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
     }
   }, [isOpen]);
+
+  // Stop listening for a signer approval whenever the dialog goes away.
+  useEffect(() => {
+    if (!isOpen && amberSession) {
+      amberSession.cancel();
+      setAmberSession(null);
+    }
+  }, [isOpen, amberSession]);
+
+  // Don't keep secrets in React state after the dialog closes (e.g. after a
+  // successful login) — clear them on close.
+  useEffect(() => {
+    if (!isOpen) {
+      setNsec('');
+      setBunkerUri('');
+    }
+  }, [isOpen]);
+
+  const handleAmberStart = () => {
+    setErrors(prev => ({ ...prev, amber: undefined }));
+    const session = startNostrConnect(nostr, {
+      name: 'gratefulday.space',
+      url: 'https://gratefulday.space',
+    });
+    setAmberSession(session);
+
+    session.established
+      .then((loginObj) => {
+        login.remote(loginObj);
+        setAmberSession(null);
+        onLogin();
+        onClose();
+      })
+      .catch((e: unknown) => {
+        // Cancellation (dialog closed / retry) is not an error worth showing.
+        if (e instanceof DOMException && e.name === 'AbortError') return;
+        console.error('Amber login failed:', e);
+        setAmberSession(null);
+        setErrors(prev => ({
+          ...prev,
+          amber: 'Could not complete the Amber connection. Please try again.',
+        }));
+      });
+  };
+
+  const handleAmberCopy = async () => {
+    if (!amberSession) return;
+    try {
+      await navigator.clipboard.writeText(amberSession.uri);
+      setAmberCopied(true);
+      setTimeout(() => setAmberCopied(false), 2000);
+    } catch {
+      // Clipboard unavailable — the link button still works.
+    }
+  };
 
   const handleExtensionLogin = async () => {
     setIsLoading(true);
@@ -68,13 +145,14 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
       onLogin();
       onClose();
     } catch (e: unknown) {
-      const error = e as Error;
-      console.error('Bunker login failed:', error);
-      console.error('Nsec login failed:', error);
-      console.error('Extension login failed:', error);
+      console.error('Extension login failed:', e);
+      // Don't surface raw extension error messages — show our own copy.
+      const notFound = e instanceof Error && e.message.startsWith('Nostr extension not found');
       setErrors(prev => ({
         ...prev,
-        extension: error instanceof Error ? error.message : 'Extension login failed'
+        extension: notFound
+          ? e.message
+          : 'Extension login failed. Please approve the request in your extension and try again.'
       }));
     } finally {
       setIsLoading(false);
@@ -177,12 +255,10 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
     }
   };
 
-  const defaultTab = 'nostr' in window ? 'extension' : 'key';
-
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent
-        className={cn("max-w-[95vw] sm:max-w-md max-h-[90vh] max-h-[90dvh] p-0 overflow-hidden rounded-2xl overflow-y-scroll")}
+        className={cn("max-w-[95vw] sm:max-w-md p-0 overflow-hidden rounded-2xl flex flex-col")}
       >
         <DialogHeader className={cn('px-6 pt-6 pb-1 relative')}>
 
@@ -190,7 +266,7 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
               Sign up or log in to continue
             </DialogDescription>
         </DialogHeader>
-        <div className='px-6 pt-2 pb-4 space-y-4 overflow-y-auto flex-1'>
+        <div className='px-6 pt-2 pb-4 space-y-4 overflow-y-auto flex-1 min-h-0'>
           {/* Prominent Sign Up Section */}
           <div className='relative p-4 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-blue-950/50 dark:to-indigo-950/50 border border-blue-200 dark:border-blue-800 overflow-hidden'>
             <div className='relative z-10 text-center space-y-3'>
@@ -225,148 +301,152 @@ const LoginDialog: React.FC<LoginDialogProps> = ({ isOpen, onClose, onLogin, onS
             </div>
           </div>
 
-          {/* Login Methods */}
-          <Tabs defaultValue={defaultTab} className="w-full">
-            <TabsList className="grid w-full grid-cols-3 bg-muted/80 rounded-lg mb-4">
-              <TabsTrigger value="extension" className="flex items-center gap-2">
-                <Shield className="w-4 h-4" />
-                <span>Extension</span>
-              </TabsTrigger>
-              <TabsTrigger value="key" className="flex items-center gap-2">
-                <KeyRound className="w-4 h-4" />
-                <span>Key</span>
-              </TabsTrigger>
-              <TabsTrigger value="bunker" className="flex items-center gap-2">
-                <Cloud className="w-4 h-4" />
-                <span>Bunker</span>
-              </TabsTrigger>
-            </TabsList>
-            <TabsContent value='extension' className='space-y-3 bg-muted'>
-              {errors.extension && (
-                <Alert variant="destructive">
-                  <AlertTriangle className="h-4 w-4" />
-                  <AlertDescription>{errors.extension}</AlertDescription>
-                </Alert>
-              )}
-              <div className='text-center p-4 rounded-lg bg-gray-50 dark:bg-gray-800'>
-                <Shield className='w-12 h-12 mx-auto mb-3 text-primary' />
-                <p className='text-sm text-gray-600 dark:text-gray-300 mb-4'>
-                  Login with one click using the browser extension
+          {/* All login methods, visible at once */}
+
+          {/* Amber (NIP-46 via nostrconnect://) */}
+          <MethodSection
+            icon={<Smartphone className='w-4 h-4 text-orange-500' />}
+            title='Amber (Android signer)'
+          >
+            {errors.amber && (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>{errors.amber}</AlertDescription>
+              </Alert>
+            )}
+            {!amberSession ? (
+              <>
+                <p className='text-sm text-muted-foreground'>
+                  Keep your key in the Amber app and approve everything there — one prompt covers all permissions.
                 </p>
-                <div className="flex justify-center">
-                  <Button
-                    className='w-full rounded-full py-4'
-                    onClick={handleExtensionLogin}
-                    disabled={isLoading}
-                  >
-                    {isLoading ? 'Logging in...' : 'Login with Extension'}
-                  </Button>
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value='key' className='space-y-4'>
-              <div className='space-y-4'>
-                <div className='space-y-2'>
-                  <label htmlFor='nsec' className='text-sm font-medium'>
-                    Secret Key (nsec)
-                  </label>
-                  <Input
-                    id='nsec'
-                    type="password"
-                    value={nsec}
-                    onChange={(e) => {
-                      setNsec(e.target.value);
-                      if (errors.nsec) setErrors(prev => ({ ...prev, nsec: undefined }));
-                    }}
-                    className={`rounded-lg ${
-                      errors.nsec ? 'border-red-500 focus-visible:ring-red-500' : ''
-                    }`}
-                    placeholder='nsec1...'
-                    autoComplete="off"
-                  />
-                  {errors.nsec && (
-                    <p className="text-sm text-red-500">{errors.nsec}</p>
-                  )}
-                </div>
-
                 <Button
-                  className='w-full rounded-full py-3'
-                  onClick={handleKeyLogin}
-                  disabled={isLoading || !nsec.trim()}
+                  className='w-full rounded-full bg-orange-500 hover:bg-orange-600 text-white'
+                  onClick={handleAmberStart}
                 >
-                  {isLoading ? 'Verifying...' : 'Log In'}
+                  Connect with Amber
                 </Button>
-
-                <div className='relative'>
-                  <div className='absolute inset-0 flex items-center'>
-                    <div className='w-full border-t border-muted'></div>
-                  </div>
-                  <div className='relative flex justify-center text-xs'>
-                    <span className='px-2 bg-background text-muted-foreground'>
-                      or
-                    </span>
-                  </div>
-                </div>
-
-                <div className='text-center'>
-                  <input
-                    type='file'
-                    accept='.txt'
-                    className='hidden'
-                    ref={fileInputRef}
-                    onChange={handleFileUpload}
-                  />
-                  <Button
-                    variant='outline'
-                    className='w-full'
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isLoading || isFileLoading}
-                  >
-                    <Upload className='w-4 h-4 mr-2' />
-                    {isFileLoading ? 'Reading File...' : 'Upload Your Key File'}
-                  </Button>
-                  {errors.file && (
-                    <p className="text-sm text-red-500 mt-2">{errors.file}</p>
-                  )}
-                </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value='bunker' className='space-y-3 bg-muted'>
+              </>
+            ) : (
               <div className='space-y-2'>
-                <label htmlFor='bunkerUri' className='text-sm font-medium text-gray-700 dark:text-gray-400'>
-                  Bunker URI
-                </label>
-                <Input
-                  id='bunkerUri'
-                  value={bunkerUri}
-                  onChange={(e) => {
-                    setBunkerUri(e.target.value);
-                    if (errors.bunker) setErrors(prev => ({ ...prev, bunker: undefined }));
-                  }}
-                  className={`rounded-lg border-gray-300 dark:border-gray-700 focus-visible:ring-primary ${
-                    errors.bunker ? 'border-red-500' : ''
-                  }`}
-                  placeholder='bunker://'
-                  autoComplete="off"
-                />
-                {errors.bunker && (
-                  <p className="text-sm text-red-500">{errors.bunker}</p>
-                )}
-              </div>
-
-              <div className="flex justify-center">
-                <Button
-                  className='w-full rounded-full py-4'
-                  onClick={handleBunkerLogin}
-                  disabled={isLoading || !bunkerUri.trim()}
-                >
-                  {isLoading ? 'Connecting...' : 'Login with Bunker'}
+                <Button asChild className='w-full rounded-full bg-orange-500 hover:bg-orange-600 text-white'>
+                  <a href={amberSession.uri}>Open in Amber</a>
                 </Button>
+                <Button variant='outline' className='w-full rounded-full' onClick={handleAmberCopy}>
+                  {amberCopied ? <Check className='w-4 h-4 mr-2' /> : <Copy className='w-4 h-4 mr-2' />}
+                  {amberCopied ? 'Copied' : 'Copy connection link'}
+                </Button>
+                <p className='flex items-center justify-center gap-2 text-sm text-muted-foreground'>
+                  <Loader2 className='w-4 h-4 animate-spin' />
+                  Waiting for approval in Amber…
+                </p>
               </div>
-            </TabsContent>
-          </Tabs>
+            )}
+          </MethodSection>
+
+          {/* Browser extension */}
+          <MethodSection
+            icon={<Shield className='w-4 h-4 text-primary' />}
+            title='Browser extension'
+          >
+            {errors.extension && (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>{errors.extension}</AlertDescription>
+              </Alert>
+            )}
+            <p className='text-sm text-muted-foreground'>
+              Login with one click using a NIP-07 browser extension
+            </p>
+            <Button
+              className='w-full rounded-full'
+              onClick={handleExtensionLogin}
+              disabled={isLoading}
+            >
+              {isLoading ? 'Logging in...' : 'Login with Extension'}
+            </Button>
+          </MethodSection>
+
+          {/* Bunker URI */}
+          <MethodSection
+            icon={<Cloud className='w-4 h-4 text-primary' />}
+            title='Bunker (remote signer)'
+          >
+            <div className='space-y-2'>
+              <Input
+                id='bunkerUri'
+                value={bunkerUri}
+                onChange={(e) => {
+                  setBunkerUri(e.target.value);
+                  if (errors.bunker) setErrors(prev => ({ ...prev, bunker: undefined }));
+                }}
+                className={`rounded-lg ${errors.bunker ? 'border-red-500' : ''}`}
+                placeholder='bunker://'
+                autoComplete="off"
+              />
+              {errors.bunker && (
+                <p className="text-sm text-red-500">{errors.bunker}</p>
+              )}
+            </div>
+            <Button
+              className='w-full rounded-full'
+              onClick={handleBunkerLogin}
+              disabled={isLoading || !bunkerUri.trim()}
+            >
+              {isLoading ? 'Connecting...' : 'Login with Bunker'}
+            </Button>
+          </MethodSection>
+
+          {/* Secret key */}
+          <MethodSection
+            icon={<KeyRound className='w-4 h-4 text-primary' />}
+            title='Secret key (nsec)'
+          >
+            <div className='space-y-2'>
+              <Input
+                id='nsec'
+                type="password"
+                value={nsec}
+                onChange={(e) => {
+                  setNsec(e.target.value);
+                  if (errors.nsec) setErrors(prev => ({ ...prev, nsec: undefined }));
+                }}
+                className={`rounded-lg ${
+                  errors.nsec ? 'border-red-500 focus-visible:ring-red-500' : ''
+                }`}
+                placeholder='nsec1...'
+                autoComplete="off"
+              />
+              {errors.nsec && (
+                <p className="text-sm text-red-500">{errors.nsec}</p>
+              )}
+            </div>
+            <Button
+              className='w-full rounded-full'
+              onClick={handleKeyLogin}
+              disabled={isLoading || !nsec.trim()}
+            >
+              {isLoading ? 'Verifying...' : 'Log In'}
+            </Button>
+            <input
+              type='file'
+              accept='.txt'
+              className='hidden'
+              ref={fileInputRef}
+              onChange={handleFileUpload}
+            />
+            <Button
+              variant='outline'
+              className='w-full'
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isLoading || isFileLoading}
+            >
+              <Upload className='w-4 h-4 mr-2' />
+              {isFileLoading ? 'Reading File...' : 'Upload Your Key File'}
+            </Button>
+            {errors.file && (
+              <p className="text-sm text-red-500 mt-2">{errors.file}</p>
+            )}
+          </MethodSection>
         </div>
       </DialogContent>
     </Dialog>
