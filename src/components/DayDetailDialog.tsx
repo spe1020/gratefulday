@@ -24,7 +24,7 @@ import { Globe, Loader2, Lock, Pencil, Plus, Save, Sparkles, Share2, Trash2, X }
 import type { DayInfo } from '@/lib/gratitudeUtils';
 import { getQuoteForDay, getAffirmationForDay, formatDisplayDate } from '@/lib/gratitudeUtils';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
-import { useNostrPublish } from '@/hooks/useNostrPublish';
+import { useNostrPublish, SignerTimeoutError } from '@/hooks/useNostrPublish';
 import { useGratitudeEntry } from '@/hooks/useGratitudeEntries';
 import { useDeleteGratitudeEntry } from '@/hooks/useDeleteGratitudeEntry';
 import { useNip44Support, cacheNip44Support } from '@/hooks/useNip44Support';
@@ -476,6 +476,13 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     return `Encryption failed: ${error instanceof Error ? error.message : 'unknown error'}. ${reassure}`;
   };
 
+  const describeSaveError = (error: unknown): string => {
+    if (error instanceof SignerTimeoutError) {
+      return 'Your signer did not respond — nothing was saved. Your notes are still here; check your signer app and try again.';
+    }
+    return 'Nothing was saved — your notes are still here. Please try again.';
+  };
+
   const handleSave = async () => {
     if (!user) {
       setShowLoginDialog(true);
@@ -527,11 +534,10 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
         // Instant streak/calendar/heatmap/milestone refresh (no refetch).
         cacheSavedEntry(data);
       },
-      onError: () => {
+      onError: (error) => {
         toast({
           title: 'Failed to save',
-          description:
-            'Nothing was saved — your notes are still here. Please try again.',
+          description: describeSaveError(error),
           variant: 'destructive',
         });
       },
@@ -642,11 +648,10 @@ https://gratefulday.space`;
             }
           );
         },
-        onError: () => {
+        onError: (error) => {
           toast({
             title: 'Failed to save',
-            description:
-              'Nothing was saved — your notes are still here. Please try again.',
+            description: describeSaveError(error),
             variant: 'destructive',
           });
         },
