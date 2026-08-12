@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { GratitudeComposer } from './GratitudeComposer';
 import { TodayHero } from './TodayHero';
 import { StreakBadge } from './StreakBadge';
 import { GratitudeVine } from './GratitudeVine';
@@ -45,12 +46,12 @@ export function CalendarView({ days, entriesByDate }: CalendarViewProps) {
   return (
     <>
       <div className="min-h-screen py-4 sm:py-6 lg:py-8">
-        {/* Today Hero - Large, centered, prominent */}
-        <TodayHero
-          day={today}
-          onOpenDetail={handleOpenDetail}
-          totalDays={totalDays}
-        />
+        {/* Compose first: arriving here lands directly on a writable editor,
+            no dialog step. */}
+        <GratitudeComposer day={today} />
+
+        {/* Today's context — date, progress, quote, affirmation */}
+        <TodayHero day={today} totalDays={totalDays} />
 
         {/* Streak strip - hidden when logged out or no entries yet */}
         <StreakBadge />
