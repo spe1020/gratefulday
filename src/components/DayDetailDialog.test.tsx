@@ -78,6 +78,7 @@ vi.mock('./AutocompleteTextarea', () => ({
 vi.mock('./auth/LoginDialog', () => ({ default: () => null }));
 
 import { DayDetailDialog } from './DayDetailDialog';
+import { readEntryDraft, clearEntryDraft } from '@/lib/entryDraft';
 
 const TODAY: DayInfo = {
   dayOfYear: 164,
@@ -107,6 +108,7 @@ const encryptedEntry: NostrEvent = {
 describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearEntryDraft();
     // Defaults: logged-in, signer without NIP-44 (toggle hidden, Public).
     mockUser.mockReturnValue({
       user: { pubkey: 'pk-self', method: 'extension', signer: {} },
@@ -446,6 +448,7 @@ describe('DayDetailDialog — failed-save data safety', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearEntryDraft();
     mockNip44.mockReturnValue({ supported: true });
     mockUser.mockReturnValue({
       user: { pubkey: 'pk-self', method: 'extension', signer: failingSigner },
@@ -502,5 +505,117 @@ describe('DayDetailDialog — failed-save data safety', () => {
     // Encryption failed before any publish: neither the 36669 nor a kind 1 fired.
     expect(publish).not.toHaveBeenCalled();
     expect(screen.getByTestId('editor')).toHaveValue('my unsaved thoughts');
+  });
+});
+
+describe('DayDetailDialog — local draft backup', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearEntryDraft();
+    mockUser.mockReturnValue({
+      user: { pubkey: 'pk-self', method: 'extension', signer: {} },
+    });
+    mockNip44.mockReturnValue({ supported: false });
+    mockExistingEntry.mockReturnValue({ data: null });
+    mockDecrypted.mockReturnValue({
+      content: '',
+      isEncrypted: false,
+      isDecrypting: false,
+      decryptError: null,
+    });
+  });
+
+  it('backs up typed text locally and restores it after close/reopen', async () => {
+    const { rerender } = render(
+      <DayDetailDialog day={TODAY} open onOpenChange={() => {}} />
+    );
+
+    fireEvent.change(await screen.findByTestId('editor'), {
+      target: { value: 'nearly lost forever' },
+    });
+    expect(readEntryDraft(TODAY.dateString)).toEqual(['nearly lost forever']);
+
+    // Close (an accidental Esc) and reopen — the text comes back.
+    rerender(<DayDetailDialog day={TODAY} open={false} onOpenChange={() => {}} />);
+    rerender(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
+
+    expect(await screen.findByTestId('editor')).toHaveValue('nearly lost forever');
+  });
+
+  it('keeps typed text when the entry re-seeds after login resolves it', async () => {
+    // Logged out: the user types before any entry can load.
+    mockUser.mockReturnValue({ user: null });
+    const { rerender } = render(
+      <DayDetailDialog day={TODAY} open onOpenChange={() => {}} />
+    );
+    fireEvent.change(await screen.findByTestId('editor'), {
+      target: { value: 'typed while logged out' },
+    });
+
+    // Login resolves and the user's existing entry arrives — the re-seed that
+    // follows must merge the draft back in, not wipe it.
+    mockUser.mockReturnValue({
+      user: { pubkey: 'pk-self', method: 'extension', signer: {} },
+    });
+    mockExistingEntry.mockReturnValue({
+      data: {
+        ...encryptedEntry,
+        id: 'evt-after-login',
+        content: 'already saved note',
+        tags: [
+          ['d', '2026-06-13'],
+          ['day', '164'],
+          ['published_at', '1700000000'],
+        ],
+      },
+    });
+    mockDecrypted.mockReturnValue({
+      content: 'already saved note',
+      isEncrypted: false,
+      isDecrypting: false,
+      decryptError: null,
+    });
+    rerender(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
+
+    expect(await screen.findByText('already saved note')).toBeInTheDocument();
+    expect(screen.getByTestId('editor')).toHaveValue('typed while logged out');
+  });
+
+  it('clears the backup after a successful save', async () => {
+    publish.mockImplementation((event, opts) =>
+      opts?.onSuccess?.({
+        ...event,
+        id: 'evt-posted',
+        pubkey: 'pk-self',
+        created_at: 2_000_000_000,
+        sig: 'x',
+      })
+    );
+
+    render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
+    fireEvent.change(await screen.findByTestId('editor'), {
+      target: { value: 'posted moment' },
+    });
+    expect(readEntryDraft(TODAY.dateString)).toEqual(['posted moment']);
+
+    fireEvent.click(screen.getByRole('button', { name: /save entry/i }));
+
+    await waitFor(() => expect(publish).toHaveBeenCalled());
+    expect(readEntryDraft(TODAY.dateString)).toEqual([]);
+  });
+
+  it('does not restore drafts into a past day (read-only view)', () => {
+    // A leftover draft for the same date string must not leak into a
+    // past-day open, which renders read-only.
+    localStorage.setItem(
+      'gratefulday:entry-draft:v1',
+      JSON.stringify({ date: '2026-06-13', notes: ['leftover'], savedAt: Date.now() })
+    );
+    const pastDay: DayInfo = { ...TODAY, isToday: false, isPast: true };
+    mockExistingEntry.mockReturnValue({ data: null });
+
+    render(<DayDetailDialog day={pastDay} open onOpenChange={() => {}} />);
+
+    expect(screen.queryByText('leftover')).not.toBeInTheDocument();
   });
 });

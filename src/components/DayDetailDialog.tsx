@@ -40,6 +40,7 @@ import {
 import type { NostrEvent, NostrSigner } from '@nostrify/nostrify';
 import { dedupeEntriesByDTag } from '@/lib/streakUtils';
 import { joinNotes, splitNotes } from '@/lib/entryNotes';
+import { readEntryDraft, writeEntryDraft, clearEntryDraft } from '@/lib/entryDraft';
 import { useToast } from '@/hooks/useToast';
 import LoginDialog from './auth/LoginDialog';
 import { nip19 } from 'nostr-tools';
@@ -236,7 +237,16 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   // and we never seed plaintext over an entry we couldn't decrypt: a decrypt
   // failure leaves the editor empty AND save/share disabled, so a blank box can
   // never silently overwrite content the user can't currently read.
+  // Locally backed-up draft notes are merged in after the published cards
+  // (editable days only), so text typed before an accidental close, a page
+  // reload, or a login round-trip comes back instead of being lost — see
+  // entryDraft.ts for the storage/expiry contract.
   const seededKeyRef = useRef<string | null>(null);
+  // Bumped (as state, not a ref) each time seeding commits, so the persist
+  // effect below can tell seeded note state apart from the initial mount
+  // state within the same commit — a ref would already read as "seeded"
+  // while `notes` still holds the pre-seed placeholder.
+  const [seedEpoch, setSeedEpoch] = useState(0);
   useEffect(() => {
     if (!open) {
       seededKeyRef.current = null;
@@ -246,10 +256,21 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     const key = `${day?.dateString ?? ''}:${existingEntry?.id ?? 'none'}`;
     if (seededKeyRef.current === key) return;
 
-    if (!existingEntry) {
-      // No saved entry: a single fresh empty draft box (seeded once).
-      setNotes([makeNote('', 'draft')]);
+    const seedWith = (publishedTexts: string[]) => {
+      const published = publishedTexts.map((text) => makeNote(text, 'published'));
+      const drafts = (day && !day.isPast ? readEntryDraft(day.dateString) : [])
+        // A draft identical to a published note is the note, already saved.
+        .filter((text) => !publishedTexts.includes(text))
+        .map((text) => makeNote(text, 'draft'));
+      const seeded = [...published, ...drafts];
+      setNotes(seeded.length > 0 ? seeded : [makeNote('', 'draft')]);
       seededKeyRef.current = key;
+      setSeedEpoch((epoch) => epoch + 1);
+    };
+
+    if (!existingEntry) {
+      // No saved entry: any backed-up draft, else a single fresh empty box.
+      seedWith([]);
       return;
     }
 
@@ -259,24 +280,30 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     if (decryptError) {
       // Fail-closed: couldn't read it, so don't seed plaintext. Latch to stop
       // re-firing; the locked UI + disabled save/share guard the rest.
-      setNotes([makeNote('', 'draft')]);
-      seededKeyRef.current = key;
+      seedWith([]);
       return;
     }
 
     // Successful decrypt or plaintext passthrough: stored notes seed as
     // published cards (one per note); empty entry falls back to a draft box.
-    const seeded = splitNotes(entryContent);
-    setNotes(
-      seeded.length > 0
-        ? seeded.map((text) => makeNote(text, 'published'))
-        : [makeNote('', 'draft')]
-    );
-    seededKeyRef.current = key;
+    seedWith(splitNotes(entryContent));
     // Keyed on existingEntry?.id, not the object: a background refetch that
     // returns an identity-changed-but-same entry must not re-fire seeding.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, day?.dateString, existingEntry?.id, isDecrypting, decryptError, entryContent]);
+
+  // Back up unposted draft text locally on every edit (plaintext, this device
+  // only, 24h expiry — see entryDraft.ts). This is what makes an accidental
+  // Esc, a "save → oh, you're not logged in → login" round-trip, or a page
+  // reload lossless: the next open restores the unsaved text.
+  useEffect(() => {
+    if (!open || !day || day.isPast) return;
+    if (seedEpoch === 0) return; // never persist (or clear) pre-seed state
+    writeEntryDraft(
+      day.dateString,
+      notes.filter((note) => note.status === 'draft').map((note) => note.text)
+    );
+  }, [notes, seedEpoch, open, day]);
 
   // Focus the box for the pending note id once it has mounted as a draft.
   // Runs after every commit (cheap ref check); Add and Edit set the target id,
@@ -516,6 +543,8 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
 
     createEvent(entryEvent, {
       onSuccess: (data) => {
+        // Saved for real — the local backup has served its purpose.
+        clearEntryDraft();
         toast({
           title: isPrivate ? 'Private reflection saved 🔒' : 'Reflection saved! ✨',
           description: isPrivate
@@ -580,6 +609,8 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
       entryEvent,
       {
         onSuccess: (data) => {
+          // Saved for real — the local backup has served its purpose.
+          clearEntryDraft();
           // The journal entry is committed — reflect published cards now (the
           // separate kind 1 share below doesn't affect the entry's state).
           markEntryPublished(trimmedText, data.id);
