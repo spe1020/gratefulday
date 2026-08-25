@@ -3,6 +3,9 @@
  * Uses Primal's WebSocket cache API for fast, reliable profile searches
  */
 
+import { verifyEvent } from 'nostr-tools';
+import type { Event } from 'nostr-tools';
+
 type PrimalProfile = {
   pubkey: string;
   name?: string;
@@ -38,13 +41,17 @@ export class PrimalCacheService {
 
   private connect() {
     const endpoint = this.endpoints[this.currentEndpoint];
-    console.log(`[PrimalCache] Connecting to ${endpoint}`);
+    if (import.meta.env.DEV) {
+      console.log(`[PrimalCache] Connecting to ${endpoint}`);
+    }
 
     try {
       this.ws = new WebSocket(endpoint);
 
       this.ws.onopen = () => {
-        console.log('[PrimalCache] Connected');
+        if (import.meta.env.DEV) {
+          console.log('[PrimalCache] Connected');
+        }
         this.reconnectAttempts = 0;
       };
 
@@ -62,7 +69,9 @@ export class PrimalCacheService {
       };
 
       this.ws.onclose = () => {
-        console.log('[PrimalCache] Connection closed');
+        if (import.meta.env.DEV) {
+          console.log('[PrimalCache] Connection closed');
+        }
         this.handleDisconnect();
       };
     } catch (error) {
@@ -82,7 +91,9 @@ export class PrimalCacheService {
     // Try reconnecting
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
-      console.log(`[PrimalCache] Reconnecting... (attempt ${this.reconnectAttempts})`);
+      if (import.meta.env.DEV) {
+        console.log(`[PrimalCache] Reconnecting... (attempt ${this.reconnectAttempts})`);
+      }
 
       // Try next endpoint on reconnect
       this.currentEndpoint = (this.currentEndpoint + 1) % this.endpoints.length;
@@ -99,10 +110,12 @@ export class PrimalCacheService {
     const [messageType, requestId, ...rest] = data;
 
     if (messageType === 'EVENT' && requestId && rest.length > 0) {
-      const event = rest[0];
+      const event = rest[0] as Event;
       const pending = this.pendingRequests.get(requestId);
 
-      if (pending && event.kind === 0) {
+      // Primal is an untrusted third party — only accept kind-0 events whose
+      // signatures actually verify.
+      if (pending && event?.kind === 0 && this.isValidEvent(event)) {
         try {
           const metadata = JSON.parse(event.content);
           pending.profiles.push({
@@ -130,8 +143,38 @@ export class PrimalCacheService {
     }
   }
 
+  private isValidEvent(event: Event): boolean {
+    try {
+      return verifyEvent(event);
+    } catch {
+      return false;
+    }
+  }
+
   private generateRequestId(): string {
     return `search_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  }
+
+  /**
+   * Lazily (re)connect when the socket is down — including after the
+   * background reconnect loop has given up — so a transient outage doesn't
+   * disable search for the rest of the session.
+   */
+  private async ensureConnected(timeoutMs: number): Promise<void> {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+
+    if (!this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING) {
+      this.reconnectAttempts = 0;
+      this.currentEndpoint = (this.currentEndpoint + 1) % this.endpoints.length;
+      this.connect();
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error('WebSocket not connected');
   }
 
   public async searchProfiles(query: string, limit: number = 10, timeoutMs: number = 5000): Promise<PrimalProfile[]> {
@@ -139,9 +182,7 @@ export class PrimalCacheService {
       return [];
     }
 
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error('WebSocket not connected');
-    }
+    await this.ensureConnected(Math.min(timeoutMs, 3000));
 
     const requestId = this.generateRequestId();
 

@@ -1,6 +1,6 @@
 
 import { useNostr } from '@nostrify/react';
-import { useCallback, useRef } from 'react';
+import { useCallback } from 'react';
 import { nip19 } from 'nostr-tools';
 import { getPrimalCache } from './primalCache';
 
@@ -13,16 +13,49 @@ type User = {
 
 export const useProfileSearchService = () => {
   const { nostr } = useNostr();
-  const primalCache = useRef(getPrimalCache());
 
   const searchProfiles = useCallback(async (query: string): Promise<User[]> => {
     if (query.length < 2) {
       return [];
     }
 
+    // NIP-50 search against the user's own relays first: no third-party SPOF,
+    // and the query text isn't leaked to Primal unless the relays yield nothing.
     try {
-      // Use Primal cache for fast, reliable search
-      const profiles = await primalCache.current.searchProfiles(query, 10);
+      const events = await nostr.query(
+        [{ kinds: [0], search: query, limit: 10 }],
+        { signal: AbortSignal.timeout(5000) },
+      );
+
+      const seen = new Set<string>();
+      const results: User[] = [];
+      for (const event of events) {
+        if (seen.has(event.pubkey)) continue;
+        seen.add(event.pubkey);
+        try {
+          const metadata = JSON.parse(event.content);
+          if (metadata.name || metadata.display_name) {
+            results.push({
+              name: metadata.display_name || metadata.name || '',
+              picture: metadata.picture || '',
+              pubkey: event.pubkey,
+              nip05: metadata.nip05,
+            });
+          }
+        } catch {
+          // Unparseable metadata — skip this profile
+        }
+      }
+      if (results.length > 0) {
+        return results;
+      }
+    } catch (error) {
+      console.error('Error searching profiles via relays:', error);
+    }
+
+    // Fallback: Primal cache (lazily connected only when actually needed)
+    try {
+      const profiles = await getPrimalCache().searchProfiles(query, 10);
 
       return profiles
         .filter(p => p.name || p.display_name) // Only include profiles with names
@@ -36,7 +69,7 @@ export const useProfileSearchService = () => {
       console.error('Error searching profiles via Primal:', error);
       return [];
     }
-  }, []);
+  }, [nostr]);
 
   const fetchProfile = useCallback(async (pubkey: string): Promise<User | null> => {
     const events = await nostr.query(
@@ -46,7 +79,8 @@ export const useProfileSearchService = () => {
           authors: [pubkey],
           limit: 1,
         },
-      ]
+      ],
+      { signal: AbortSignal.timeout(5000) }
     );
 
     if (events && events.length > 0) {
