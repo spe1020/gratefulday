@@ -324,8 +324,9 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
 
   if (!day) return null;
 
-  const quote = getQuoteForDay(day.dayOfYear);
-  const affirmation = getAffirmationForDay(day.dayOfYear);
+  const year = day.date.getFullYear();
+  const quote = getQuoteForDay(day.dayOfYear, year);
+  const affirmation = getAffirmationForDay(day.dayOfYear, year);
   const isPastDay = day.isPast;
 
   // Editing an existing entry: the editor mustn't accept a save until the entry

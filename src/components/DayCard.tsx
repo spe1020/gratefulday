@@ -105,7 +105,7 @@ export function DayCard({ day, hasEntry, onOpenDetail }: DayCardProps) {
                 Daily Affirmation
               </p>
               <p className="text-sm text-foreground/80 line-clamp-3 italic">
-                "{getAffirmationForDay(day.dayOfYear)}"
+                "{getAffirmationForDay(day.dayOfYear, day.date.getFullYear())}"
               </p>
             </div>
           </div>

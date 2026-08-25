@@ -38,8 +38,9 @@ export function TodayHero({ day, onOpenDetail, totalDays }: TodayHeroProps) {
     }, 300);
   };
 
-  const quote = getQuoteForDay(day.dayOfYear);
-  const affirmation = getAffirmationForDay(day.dayOfYear);
+  const year = day.date.getFullYear();
+  const quote = getQuoteForDay(day.dayOfYear, year);
+  const affirmation = getAffirmationForDay(day.dayOfYear, year);
   
   // Calculate progress for text display
   const progress = (day.dayOfYear / totalDays) * 100;

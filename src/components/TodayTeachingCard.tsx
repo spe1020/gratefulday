@@ -18,11 +18,13 @@ import { cn } from '@/lib/utils';
 
 interface TodayTeachingCardProps {
   dayOfYear: number;
+  year?: number;
   defaultOpen?: boolean;
 }
 
 export function TodayTeachingCard({
   dayOfYear,
+  year,
   defaultOpen = true,
 }: TodayTeachingCardProps) {
   const isMobile = useIsMobile();
@@ -39,8 +41,8 @@ export function TodayTeachingCard({
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const teaching = useMemo(
-    () => getTeachingForDay(dayOfYear, preferences, shuffle),
-    [dayOfYear, preferences, shuffle],
+    () => getTeachingForDay(dayOfYear, preferences, shuffle, year),
+    [dayOfYear, preferences, shuffle, year],
   );
   const handleRefresh = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
