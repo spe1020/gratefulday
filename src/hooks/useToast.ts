@@ -144,6 +144,11 @@ function toast({ ...props }: Toast) {
     type: "ADD_TOAST",
     toast: {
       ...props,
+      // Destructive toasts report a failed action ("nothing was saved") — they
+      // must stay visible until the user dismisses them, not auto-vanish.
+      duration:
+        props.duration ??
+        (props.variant === "destructive" ? Infinity : undefined),
       id,
       open: true,
       onOpenChange: (open) => {

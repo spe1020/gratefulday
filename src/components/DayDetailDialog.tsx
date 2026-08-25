@@ -24,7 +24,7 @@ import { Globe, Loader2, Lock, Pencil, Plus, Save, Sparkles, Share2, Trash2, X }
 import type { DayInfo } from '@/lib/gratitudeUtils';
 import { getQuoteForDay, getAffirmationForDay, formatDisplayDate } from '@/lib/gratitudeUtils';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
-import { useNostrPublish } from '@/hooks/useNostrPublish';
+import { useNostrPublish, SignerTimeoutError } from '@/hooks/useNostrPublish';
 import { useGratitudeEntry } from '@/hooks/useGratitudeEntries';
 import { useDeleteGratitudeEntry } from '@/hooks/useDeleteGratitudeEntry';
 import { useNip44Support, cacheNip44Support } from '@/hooks/useNip44Support';
@@ -476,6 +476,33 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     return `Encryption failed: ${error instanceof Error ? error.message : 'unknown error'}. ${reassure}`;
   };
 
+  /**
+   * Name the actual cause. A generic "please try again" is what makes a failed
+   * save undiagnosable: the app knows why it failed and the user has no way to
+   * find out.
+   */
+  const describeSaveError = (error: unknown): string => {
+    const kept = 'Nothing was saved — your notes are still here.';
+
+    if (error instanceof SignerTimeoutError) {
+      return `Your signer did not respond. ${kept} Check your signer app and try again.`;
+    }
+
+    // Publishing uses Promise.any across relays, so this only happens when
+    // EVERY relay rejected.
+    if (error instanceof AggregateError) {
+      const reason = error.errors
+        .map((e) => (e instanceof Error ? e.message : String(e)))
+        .find((m) => m && m.length > 0);
+      return `No relay accepted the entry${reason ? ` (${reason})` : ''}. ${kept} Check your relays and try again.`;
+    }
+
+    const message = error instanceof Error ? error.message : String(error ?? '');
+    // Signer rejections surface here — "user rejected", an ungranted event
+    // kind — which is exactly what needs to reach the user.
+    return message ? `${message}. ${kept}` : `${kept} Please try again.`;
+  };
+
   const handleSave = async () => {
     if (!user) {
       setShowLoginDialog(true);
@@ -527,11 +554,10 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
         // Instant streak/calendar/heatmap/milestone refresh (no refetch).
         cacheSavedEntry(data);
       },
-      onError: () => {
+      onError: (error) => {
         toast({
           title: 'Failed to save',
-          description:
-            'Nothing was saved — your notes are still here. Please try again.',
+          description: describeSaveError(error),
           variant: 'destructive',
         });
       },
@@ -642,11 +668,10 @@ https://gratefulday.space`;
             }
           );
         },
-        onError: () => {
+        onError: (error) => {
           toast({
             title: 'Failed to save',
-            description:
-              'Nothing was saved — your notes are still here. Please try again.',
+            description: describeSaveError(error),
             variant: 'destructive',
           });
         },
