@@ -450,7 +450,7 @@ export function ZapDialog({ target, children, className, open: controlledOpen, o
           </div>
         </DialogTrigger>
       )}
-      <DialogContent className="sm:max-w-[425px] max-h-[95vh] overflow-hidden" data-testid="zap-modal">
+      <DialogContent className="sm:max-w-[425px]" data-testid="zap-modal">
         <DialogHeader>
           <DialogTitle className="text-lg break-words">
             {invoice ? 'Lightning Payment' : 'Send a Zap'}

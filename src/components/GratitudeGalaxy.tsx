@@ -311,7 +311,7 @@ export function GratitudeGalaxy() {
 
       {/* Star detail */}
       <Dialog open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>
               {selected &&

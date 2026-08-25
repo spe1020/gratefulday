@@ -229,7 +229,7 @@ export function CommunityCalendar() {
         open={!!selectedDate}
         onOpenChange={(open) => !open && setSelectedDate(null)}
       >
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>
               {selectedDate &&
