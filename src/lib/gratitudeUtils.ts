@@ -13,13 +13,14 @@ export interface DayInfo {
 }
 
 /**
- * Get the day of year (1-365/366) for a given date
+ * Get the day of year (1-365/366) for a given date.
+ * Computed over UTC-normalized dates: local-Date millisecond division is off
+ * by one for every date between a DST spring-forward and fall-back.
  */
 export function getDayOfYear(date: Date): number {
-  const start = new Date(date.getFullYear(), 0, 0);
-  const diff = date.getTime() - start.getTime();
-  const oneDay = 1000 * 60 * 60 * 24;
-  return Math.floor(diff / oneDay);
+  const current = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+  const start = Date.UTC(date.getFullYear(), 0, 0);
+  return Math.round((current - start) / 86_400_000);
 }
 
 /**
@@ -27,18 +28,6 @@ export function getDayOfYear(date: Date): number {
  */
 export function getTotalDaysInYear(year: number): number {
   return isLeapYear(year) ? 366 : 365;
-}
-
-/**
- * Get the week of the year (ISO 8601 standard - week starts on Monday)
- * Returns week number (1-53)
- */
-export function getWeekOfYear(date: Date): number {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNum = d.getUTCDay() || 7; // Convert Sunday (0) to 7
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum); // Set to Thursday of current week
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
 }
 
 /**
@@ -65,6 +54,23 @@ export function formatDateString(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+/**
+ * True only for a well-formed AND semantically valid YYYY-MM-DD string.
+ * `d` tags come off the wire from arbitrary clients — a shape-only regex lets
+ * "2026-02-30" inflate streak totals and mint phantom community day buckets,
+ * so the components must round-trip through a real Date.
+ */
+export function isValidDateString(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [y, m, d] = value.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  return (
+    date.getFullYear() === y &&
+    date.getMonth() === m - 1 &&
+    date.getDate() === d
+  );
 }
 
 /**
@@ -166,8 +172,12 @@ export function getQuoteForDay(dayOfYear: number): { text: string; author: strin
     { text: "Silent gratitude isn't much use to anyone.", author: "Gladys Bronwyn Stern" },
   ];
 
-  // Use modulo to cycle through quotes
-  return quotes[(dayOfYear - 1) % quotes.length];
+  return quotes[cycleIndex(dayOfYear, quotes.length)];
+}
+
+/** Safe cycling index: clamps out-of-range day numbers instead of indexing negatively. */
+function cycleIndex(dayOfYear: number, length: number): number {
+  return (((dayOfYear - 1) % length) + length) % length;
 }
 
 /**
@@ -238,8 +248,7 @@ export function getPromptForDay(dayOfYear: number): string {
     "Your favorite time of day",
   ];
 
-  // Use modulo to cycle through prompts
-  return prompts[(dayOfYear - 1) % prompts.length];
+  return prompts[cycleIndex(dayOfYear, prompts.length)];
 }
 
 /**
@@ -318,6 +327,5 @@ export function getAffirmationForDay(dayOfYear: number): string {
     "I am worthy of peace, joy, and fulfillment.",
   ];
 
-  // Use modulo to cycle through affirmations
-  return affirmations[(dayOfYear - 1) % affirmations.length];
+  return affirmations[cycleIndex(dayOfYear, affirmations.length)];
 }

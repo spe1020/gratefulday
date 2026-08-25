@@ -26,6 +26,20 @@ describe('timeAgo', () => {
     expect(timeAgo(NOW - 10 * 86400)).not.toMatch(/^\d+[mhd]$|^now$/);
   });
 
+  it('omits the year for an old date inside the current year', () => {
+    freezeAt(NOW); // 2023-11-14
+    const label = timeAgo(NOW - 30 * 86400); // mid-October, same year
+    expect(label).not.toMatch(/2023/);
+  });
+
+  it('includes the year once the date falls in a different year', () => {
+    freezeAt(NOW);
+    // 13 months back would otherwise render as a bare "Oct 15", indistinguishable
+    // from a date in the current year.
+    const label = timeAgo(NOW - 400 * 86400);
+    expect(label).toMatch(/2022/);
+  });
+
   it('treats a future timestamp as "now" (no negative "−Nm")', () => {
     freezeAt(NOW);
     expect(timeAgo(NOW + 500)).toBe('now');

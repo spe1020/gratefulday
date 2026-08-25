@@ -79,6 +79,46 @@ describe('getWeeklyBuckets', () => {
     expect(sum(buckets)).toBe(1);
   });
 
+  it('buckets a week spanning a DST spring-forward correctly', () => {
+    // US DST begins Sunday 2026-03-08, which is itself a week start.
+    const buckets = getWeeklyBuckets(
+      new Set(['2026-03-08', '2026-03-09', '2026-03-14']),
+      new Date(2026, 2, 14)
+    );
+    const week = buckets.find((b) => b.weekStart === '2026-03-08');
+    expect(week?.count).toBe(3);
+    expect(sum(buckets)).toBe(3);
+  });
+
+  it('buckets a week spanning a DST fall-back correctly', () => {
+    // US DST ends Sunday 2026-11-01.
+    const buckets = getWeeklyBuckets(
+      new Set(['2026-11-01', '2026-11-02', '2026-11-07']),
+      new Date(2026, 10, 7)
+    );
+    const week = buckets.find((b) => b.weekStart === '2026-11-01');
+    expect(week?.count).toBe(3);
+  });
+
+  it('buckets the leap day into its own week', () => {
+    // 2024-02-29 is a Thursday; that week starts Sunday 2024-02-25.
+    const buckets = getWeeklyBuckets(new Set(['2024-02-29']), new Date(2024, 1, 29));
+    const week = buckets.find((b) => b.weekStart === '2024-02-25');
+    expect(week?.count).toBe(1);
+    expect(sum(buckets)).toBe(1);
+  });
+
+  it('keeps a week spanning the year boundary in one bucket', () => {
+    // Sunday 2025-12-28 through Saturday 2026-01-03 is a single week.
+    const buckets = getWeeklyBuckets(
+      new Set(['2025-12-29', '2026-01-01', '2026-01-03']),
+      new Date(2026, 0, 3)
+    );
+    const week = buckets.find((b) => b.weekStart === '2025-12-28');
+    expect(week?.count).toBe(3);
+    expect(sum(buckets)).toBe(3);
+  });
+
   it('honors a custom window length', () => {
     const buckets = getWeeklyBuckets(new Set(), SUN, 4);
     expect(buckets).toHaveLength(4);

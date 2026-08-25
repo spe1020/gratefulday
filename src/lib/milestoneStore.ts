@@ -41,11 +41,24 @@ export function getCelebratedMilestones(pubkey: string): number[] {
   return value.filter((m): m is number => typeof m === 'number');
 }
 
-/** Replace the celebrated set for a pubkey, preserving other pubkeys. */
+/**
+ * Record celebrated milestones for a pubkey, preserving other pubkeys.
+ *
+ * MERGE-ON-WRITE, not replace: the store is re-read here and the incoming set
+ * is unioned with whatever is already persisted, so two tabs doing
+ * read-modify-write can't drop each other's celebrations (which would re-fire
+ * an already-celebrated milestone dialog). Celebrations only ever accumulate,
+ * so a union loses nothing.
+ */
 export function setCelebratedMilestones(pubkey: string, milestones: number[]): void {
-  const store = readStore();
+  const store = readStore(); // fresh re-read at write time
+  const existing = Array.isArray(store[pubkey])
+    ? store[pubkey].filter((m): m is number => typeof m === 'number')
+    : [];
   // Enforce the invariant at the storage boundary: day-1 (`1`) is never cached
   // here — it's derived from data. Dedupe + sort for a stable, comparable set.
-  store[pubkey] = [...new Set(milestones.filter((m) => m > 1))].sort((a, b) => a - b);
+  store[pubkey] = [...new Set([...existing, ...milestones].filter((m) => m > 1))].sort(
+    (a, b) => a - b
+  );
   writeStore(store);
 }

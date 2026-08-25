@@ -25,10 +25,13 @@ describe('milestoneStore cache layer', () => {
     expect(getCelebratedMilestones(PK)).toEqual([7, 14, 30]);
   });
 
-  it('replaces (not merges) the set on write — the hook owns union semantics', () => {
+  it('merges (not replaces) on write, so a stale tab cannot drop a celebration', () => {
+    // Two tabs read-modify-write: without a union at the storage boundary the
+    // second write would erase 14 and re-fire its dialog. Celebrations only
+    // ever accumulate, so merging loses nothing.
     setCelebratedMilestones(PK, [7, 14]);
     setCelebratedMilestones(PK, [7]);
-    expect(getCelebratedMilestones(PK)).toEqual([7]);
+    expect(getCelebratedMilestones(PK)).toEqual([7, 14]);
   });
 
   it('keeps each pubkey isolated', () => {

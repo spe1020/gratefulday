@@ -65,9 +65,10 @@ function mulberry32(seed: number): () => number {
 
 /**
  * Get the single teaching to show for today based on day of year.
- * When preferences are provided, traditions are selected via weighted random
- * (seeded by dayOfYear for determinism). Traditions with weight 0 are excluded.
- * Without preferences, falls back to the original round-robin rotation.
+ * Tradition selection (see pickTradition): round-robin when no preferences are
+ * set OR all non-zero weights are equal (including the persisted all-80s
+ * default), weighted random (seeded by dayOfYear for determinism) otherwise.
+ * Traditions with weight 0 or an empty teaching pool are excluded.
  * The `shuffle` offset (default 0) shifts the seed so each value yields a
  * different teaching — used by the "another teaching" button.
  */
@@ -77,34 +78,56 @@ export function getTeachingForDay(dayOfYear: number, preferences?: TeachingPrefe
 
   const seed = dayOfYear + shuffle * 7919; // offset seed per shuffle
   const tradition = pickTradition(seed, preferences);
+  if (tradition === null) return null;
   const byTradition = all.filter((t) => t.tradition === tradition);
   if (byTradition.length === 0) return null;
 
-  // Deterministic index within the tradition's pool
-  const rand = mulberry32(seed * 1000 + tradition.length);
+  // Deterministic index within the tradition's pool, salted by the pool size
+  // so different traditions sharing a seed don't collapse to the same index.
+  const rand = mulberry32(seed * 1000 + byTradition.length);
   const withinIndex = Math.floor(rand() * byTradition.length);
   return byTradition[withinIndex] ?? null;
 }
 
-/**
- * Pick a tradition for a given day. Uses weighted random selection seeded by
- * dayOfYear so the result is stable for the whole day but varies day-to-day.
- * Falls back to round-robin when no preferences are set or all weights are equal.
- */
-function pickTradition(dayOfYear: number, preferences?: TeachingPreferences): TeachingTradition {
-  if (!preferences) {
-    // Original round-robin behaviour
-    return TEACHING_TRADITIONS[(dayOfYear - 1) % TEACHING_TRADITIONS.length];
-  }
+/** Safe cycling index over `length` items for a 1-based day number. */
+function roundRobinIndex(dayOfYear: number, length: number): number {
+  return (((dayOfYear - 1) % length) + length) % length;
+}
 
-  // Build weighted entries (exclude traditions with weight 0)
-  const entries = TEACHING_TRADITIONS
-    .map((t) => ({ tradition: t, weight: preferences[t] ?? 80 }))
+/**
+ * Pick a tradition for a given day. Only traditions with a non-empty teaching
+ * pool are considered (a weight-N tradition with zero teachings must not win
+ * the roll and blank the whole day).
+ *
+ * - No preferences, OR all eligible (weight > 0) weights EQUAL (the persisted
+ *   all-80s default included): round-robin over the eligible traditions, so
+ *   the tradition genuinely changes every day.
+ * - Otherwise: weighted random seeded by dayOfYear — stable for the whole day,
+ *   varies day-to-day. Weight-0 traditions are excluded.
+ * - All weights 0: round-robin over every non-empty tradition so something
+ *   still shows.
+ *
+ * Returns null only when no tradition has any teachings.
+ */
+function pickTradition(dayOfYear: number, preferences?: TeachingPreferences): TeachingTradition | null {
+  const available = TEACHING_TRADITIONS.filter(
+    (t) => getTeachingsByTradition(t).length > 0
+  );
+  if (available.length === 0) return null;
+
+  // Weighted entries among available traditions (exclude weight 0).
+  const entries = available
+    .map((t) => ({ tradition: t, weight: preferences?.[t] ?? 80 }))
     .filter((e) => e.weight > 0);
 
-  if (entries.length === 0) {
-    // All zeroed out – fall back to round-robin so something still shows
-    return TEACHING_TRADITIONS[(dayOfYear - 1) % TEACHING_TRADITIONS.length];
+  const allEqual = entries.every((e) => e.weight === entries[0].weight);
+
+  if (!preferences || entries.length === 0 || allEqual) {
+    // Round-robin: no prefs, all-zeroed prefs (fall back over every available
+    // tradition), or uniform weights (equal weights ARE round-robin, per the
+    // documented contract — weighted random would repeat traditions for days).
+    const pool = entries.length > 0 ? entries.map((e) => e.tradition) : available;
+    return pool[roundRobinIndex(dayOfYear, pool.length)];
   }
 
   const totalWeight = entries.reduce((sum, e) => sum + e.weight, 0);
