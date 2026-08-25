@@ -59,7 +59,11 @@ export function CalendarView({ days, entriesByDate }: CalendarViewProps) {
         <GratitudeVine />
 
         {/* Today's Teaching - Open by default when page loads */}
-        <TodayTeachingCard dayOfYear={today.dayOfYear} defaultOpen={true} />
+        <TodayTeachingCard
+          dayOfYear={today.dayOfYear}
+          year={today.date.getFullYear()}
+          defaultOpen={true}
+        />
 
         {/* Past Days - Quiet, accessible, but visually subdued */}
         <PastDaysList

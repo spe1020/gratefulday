@@ -89,15 +89,23 @@ describe('getTeachingForDay', () => {
 
 describe('getNextTeachingForDay', () => {
   it('previews the following day', () => {
-    expect(getNextTeachingForDay(10, 2026)).toEqual(getTeachingForDay(11));
+    expect(getNextTeachingForDay(10, 2026)).toEqual(
+      getTeachingForDay(11, undefined, 0, 2026)
+    );
   });
 
   it('wraps at the end of a non-leap year', () => {
-    expect(getNextTeachingForDay(365, 2026)).toEqual(getTeachingForDay(1));
+    expect(getNextTeachingForDay(365, 2026)).toEqual(
+      getTeachingForDay(1, undefined, 0, 2026)
+    );
   });
 
   it('uses day 366 before wrapping in a leap year', () => {
-    expect(getNextTeachingForDay(365, 2024)).toEqual(getTeachingForDay(366));
-    expect(getNextTeachingForDay(366, 2024)).toEqual(getTeachingForDay(1));
+    expect(getNextTeachingForDay(365, 2024)).toEqual(
+      getTeachingForDay(366, undefined, 0, 2024)
+    );
+    expect(getNextTeachingForDay(366, 2024)).toEqual(
+      getTeachingForDay(1, undefined, 0, 2024)
+    );
   });
 });

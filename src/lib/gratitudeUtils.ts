@@ -2,6 +2,9 @@
  * Utility functions for the Daily Gratitude Calendar
  */
 
+import { DAILY_QUOTES } from './data/dailyQuotes';
+import { DAILY_AFFIRMATIONS } from './data/dailyAffirmations';
+
 export interface DayInfo {
   dayOfYear: number;
   date: Date;
@@ -136,48 +139,40 @@ export function formatDisplayDate(date: Date): string {
 }
 
 /**
- * Get a deterministic quote based on day of year
+ * Deterministic index into a daily pool.
+ * A coprime stride visits every item before repeating (when gcd(stride, length) = 1).
+ * The year offset starts next calendar year at a different place in the cycle,
+ * so Jan 1 is not locked to the same line forever. Independent strides keep
+ * wisdom and affirmation from staying paired.
  */
-export function getQuoteForDay(dayOfYear: number): { text: string; author: string } {
-  const quotes = [
-    { text: "Gratitude turns what we have into enough.", author: "Anonymous" },
-    { text: "The root of joy is gratefulness.", author: "David Steindl-Rast" },
-    { text: "Gratitude is not only the greatest of virtues, but the parent of all others.", author: "Cicero" },
-    { text: "When I started counting my blessings, my whole life turned around.", author: "Willie Nelson" },
-    { text: "Gratitude makes sense of our past, brings peace for today, and creates a vision for tomorrow.", author: "Melody Beattie" },
-    { text: "Acknowledging the good that you already have in your life is the foundation for all abundance.", author: "Eckhart Tolle" },
-    { text: "Gratitude is the healthiest of all human emotions.", author: "Zig Ziglar" },
-    { text: "Let us be grateful to the people who make us happy.", author: "Marcel Proust" },
-    { text: "Gratitude is the sign of noble souls.", author: "Aesop" },
-    { text: "The struggle ends when gratitude begins.", author: "Neale Donald Walsch" },
-    { text: "Enjoy the little things, for one day you may look back and realize they were the big things.", author: "Robert Brault" },
-    { text: "Gratitude is the fairest blossom which springs from the soul.", author: "Henry Ward Beecher" },
-    { text: "In ordinary life, we hardly realize that we receive a great deal more than we give.", author: "Dietrich Bonhoeffer" },
-    { text: "Gratitude unlocks the fullness of life.", author: "Melody Beattie" },
-    { text: "The more grateful I am, the more beauty I see.", author: "Mary Davis" },
-    { text: "Gratitude is the wine for the soul. Go on. Get drunk.", author: "Rumi" },
-    { text: "Trade your expectation for appreciation and the world changes instantly.", author: "Tony Robbins" },
-    { text: "Gratitude is riches. Complaint is poverty.", author: "Doris Day" },
-    { text: "Gratitude is a powerful catalyst for happiness.", author: "Amy Collette" },
-    { text: "When you are grateful, fear disappears and abundance appears.", author: "Anthony Robbins" },
-    { text: "Gratitude is the memory of the heart.", author: "Jean Baptiste Massieu" },
-    { text: "Cultivate the habit of being grateful for every good thing that comes to you.", author: "Ralph Waldo Emerson" },
-    { text: "Gratitude is the best attitude.", author: "Anonymous" },
-    { text: "A grateful heart is a magnet for miracles.", author: "Anonymous" },
-    { text: "Gratitude is happiness doubled by wonder.", author: "G.K. Chesterton" },
-    { text: "The thankful receiver bears a plentiful harvest.", author: "William Blake" },
-    { text: "Gratitude can transform common days into thanksgivings.", author: "William Arthur Ward" },
-    { text: "As we express our gratitude, we must never forget that the highest appreciation is not to utter words but to live by them.", author: "John F. Kennedy" },
-    { text: "Gratitude is the inward feeling of kindness received.", author: "Henry Van Dyke" },
-    { text: "Silent gratitude isn't much use to anyone.", author: "Gladys Bronwyn Stern" },
-  ];
+function dailyPoolIndex(
+  dayOfYear: number,
+  year: number,
+  length: number,
+  stride: number,
+  yearStride: number,
+): number {
+  if (length <= 0) return 0;
+  const raw = (dayOfYear - 1) * stride + year * yearStride;
+  return ((raw % length) + length) % length;
+}
 
-  return quotes[cycleIndex(dayOfYear, quotes.length)];
+function calendarYear(year?: number): number {
+  return year ?? new Date().getFullYear();
 }
 
 /** Safe cycling index: clamps out-of-range day numbers instead of indexing negatively. */
 function cycleIndex(dayOfYear: number, length: number): number {
   return (((dayOfYear - 1) % length) + length) % length;
+}
+
+/**
+ * Get a deterministic quote based on day of year (and calendar year).
+ * The pool is sized for a leap year, so a given year does not repeat a line.
+ */
+export function getQuoteForDay(dayOfYear: number, year?: number): { text: string; author: string } {
+  const index = dailyPoolIndex(dayOfYear, calendarYear(year), DAILY_QUOTES.length, 47, 19);
+  return DAILY_QUOTES[index];
 }
 
 /**
@@ -252,80 +247,10 @@ export function getPromptForDay(dayOfYear: number): string {
 }
 
 /**
- * Get a daily affirmation based on day of year
+ * Get a daily affirmation based on day of year (and calendar year).
+ * The pool is sized for a leap year, so a given year does not repeat a line.
  */
-export function getAffirmationForDay(dayOfYear: number): string {
-  const affirmations = [
-    "I am worthy of love and happiness.",
-    "I choose to see the beauty in each moment.",
-    "I am grateful for the opportunities that come my way.",
-    "I trust in my ability to overcome challenges.",
-    "I am surrounded by abundance and joy.",
-    "I radiate positivity and kindness.",
-    "I am capable of creating positive change.",
-    "I embrace each day with an open heart.",
-    "I am strong, resilient, and full of potential.",
-    "I attract wonderful experiences into my life.",
-    "I am at peace with who I am becoming.",
-    "I celebrate my progress, no matter how small.",
-    "I am deserving of all good things.",
-    "I choose gratitude over worry.",
-    "I am connected to something greater than myself.",
-    "I trust the journey and enjoy the process.",
-    "I am enough, just as I am.",
-    "I welcome growth and transformation.",
-    "I am a source of light and inspiration.",
-    "I honor my feelings and respect my boundaries.",
-    "I am creating the life I want to live.",
-    "I find joy in simple pleasures.",
-    "I am patient with myself and others.",
-    "I am open to receiving love and support.",
-    "I believe in my dreams and take action.",
-    "I am grateful for my unique gifts and talents.",
-    "I choose to focus on what matters most.",
-    "I am resilient and can handle whatever comes.",
-    "I am surrounded by people who care about me.",
-    "I am creating positive energy around me.",
-    "I trust that everything is working out for my highest good.",
-    "I am worthy of rest and self-care.",
-    "I celebrate my achievements, big and small.",
-    "I am learning and growing every single day.",
-    "I am grateful for my body and all it does for me.",
-    "I choose to see the good in others.",
-    "I am creating meaningful connections.",
-    "I am aligned with my purpose and values.",
-    "I am grateful for the lessons life teaches me.",
-    "I am confident in my ability to make good decisions.",
-    "I am surrounded by beauty and wonder.",
-    "I am creating space for what truly matters.",
-    "I am grateful for the present moment.",
-    "I am kind to myself and others.",
-    "I am open to new possibilities and experiences.",
-    "I am worthy of success and fulfillment.",
-    "I choose to respond with love and compassion.",
-    "I am grateful for the support I receive.",
-    "I am creating a life filled with purpose and meaning.",
-    "I trust in my inner wisdom and intuition.",
-    "I am grateful for the gift of another day.",
-    "I am becoming the best version of myself.",
-    "I am worthy of all the good things life has to offer.",
-    "I choose to focus on solutions, not problems.",
-    "I am grateful for my ability to learn and adapt.",
-    "I am creating positive change in my life.",
-    "I am surrounded by love and support.",
-    "I am grateful for the journey, not just the destination.",
-    "I am enough, and I have enough.",
-    "I choose to see challenges as opportunities.",
-    "I am grateful for my strength and resilience.",
-    "I am creating a life I love living.",
-    "I trust that I am exactly where I need to be.",
-    "I am grateful for the people who enrich my life.",
-    "I am open to receiving abundance in all forms.",
-    "I am creating harmony and balance in my life.",
-    "I am grateful for my ability to make a difference.",
-    "I choose to live with intention and purpose.",
-    "I am worthy of peace, joy, and fulfillment.",
-  ];
-
-  return affirmations[cycleIndex(dayOfYear, affirmations.length)];
+export function getAffirmationForDay(dayOfYear: number, year?: number): string {
+  const index = dailyPoolIndex(dayOfYear, calendarYear(year), DAILY_AFFIRMATIONS.length, 53, 23);
+  return DAILY_AFFIRMATIONS[index];
 }

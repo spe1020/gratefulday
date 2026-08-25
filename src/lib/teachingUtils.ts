@@ -64,6 +64,33 @@ function mulberry32(seed: number): () => number {
 }
 
 /**
+ * Coprime stride + year offset into a pool. Visits every item before repeating
+ * when gcd(stride, length) = 1. Independent per-tradition strides keep the
+ * six lineages from locking into the same pairing across years.
+ */
+function dailyPoolIndex(
+  dayOfYear: number,
+  year: number,
+  length: number,
+  stride: number,
+  yearStride: number,
+): number {
+  if (length <= 0) return 0;
+  const raw = (dayOfYear - 1) * stride + year * yearStride;
+  return ((raw % length) + length) % length;
+}
+
+/** Per-tradition (stride, yearStride). All coprime with typical pool sizes. */
+const TRADITION_STRIDES: Record<TeachingTradition, readonly [number, number]> = {
+  Christian: [17, 11],
+  Stoic: [19, 13],
+  Buddhist: [23, 25],
+  Taoist: [29, 17],
+  Jewish: [31, 19],
+  Islamic: [37, 23],
+};
+
+/**
  * Get the single teaching to show for today based on day of year.
  * Tradition selection (see pickTradition): round-robin when no preferences are
  * set OR all non-zero weights are equal (including the persisted all-80s
@@ -71,22 +98,42 @@ function mulberry32(seed: number): () => number {
  * Traditions with weight 0 or an empty teaching pool are excluded.
  * The `shuffle` offset (default 0) shifts the seed so each value yields a
  * different teaching — used by the "another teaching" button.
+ * Pass `year` so next calendar year is not locked to this year's sequence.
  */
-export function getTeachingForDay(dayOfYear: number, preferences?: TeachingPreferences, shuffle = 0): Teaching | null {
+export function getTeachingForDay(
+  dayOfYear: number,
+  preferences?: TeachingPreferences,
+  shuffle = 0,
+  year?: number,
+): Teaching | null {
   const all = getTeachings();
   if (all.length === 0) return null;
 
-  const seed = dayOfYear + shuffle * 7919; // offset seed per shuffle
+  const y = year ?? new Date().getFullYear();
+  const seed = dayOfYear + shuffle * 7919 + y * 1009;
   const tradition = pickTradition(seed, preferences);
   if (tradition === null) return null;
   const byTradition = all.filter((t) => t.tradition === tradition);
   if (byTradition.length === 0) return null;
 
-  // Deterministic index within the tradition's pool, salted by the pool size
-  // so different traditions sharing a seed don't collapse to the same index.
-  const rand = mulberry32(seed * 1000 + byTradition.length);
-  const withinIndex = Math.floor(rand() * byTradition.length);
-  return byTradition[withinIndex] ?? null;
+  // Index by this tradition's visit count, not raw day-of-year. Round-robin
+  // lands every Nth day on the same lineage; a linear dayOfYear stride then
+  // only hits a handful of pool slots. Visit count walks the full pool.
+  const [stride, yearStride] = TRADITION_STRIDES[tradition];
+  const activeCount = countActiveTraditions(preferences);
+  const visit = Math.floor((dayOfYear - 1) / Math.max(activeCount, 1)) + shuffle;
+  const index = dailyPoolIndex(visit + 1, y, byTradition.length, stride, yearStride);
+  return byTradition[index] ?? null;
+}
+
+function countActiveTraditions(preferences?: TeachingPreferences): number {
+  const available = TEACHING_TRADITIONS.filter(
+    (t) => getTeachingsByTradition(t).length > 0
+  );
+  if (available.length === 0) return TEACHING_TRADITIONS.length;
+  if (!preferences) return available.length;
+  const n = available.filter((t) => (preferences[t] ?? 80) > 0).length;
+  return n === 0 ? available.length : n;
 }
 
 /** Safe cycling index over `length` items for a 1-based day number. */
@@ -109,29 +156,25 @@ function roundRobinIndex(dayOfYear: number, length: number): number {
  *
  * Returns null only when no tradition has any teachings.
  */
-function pickTradition(dayOfYear: number, preferences?: TeachingPreferences): TeachingTradition | null {
+function pickTradition(seed: number, preferences?: TeachingPreferences): TeachingTradition | null {
   const available = TEACHING_TRADITIONS.filter(
     (t) => getTeachingsByTradition(t).length > 0
   );
   if (available.length === 0) return null;
 
-  // Weighted entries among available traditions (exclude weight 0).
   const entries = available
     .map((t) => ({ tradition: t, weight: preferences?.[t] ?? 80 }))
     .filter((e) => e.weight > 0);
 
-  const allEqual = entries.every((e) => e.weight === entries[0].weight);
+  const allEqual = entries.length > 0 && entries.every((e) => e.weight === entries[0].weight);
 
   if (!preferences || entries.length === 0 || allEqual) {
-    // Round-robin: no prefs, all-zeroed prefs (fall back over every available
-    // tradition), or uniform weights (equal weights ARE round-robin, per the
-    // documented contract — weighted random would repeat traditions for days).
     const pool = entries.length > 0 ? entries.map((e) => e.tradition) : available;
-    return pool[roundRobinIndex(dayOfYear, pool.length)];
+    return pool[roundRobinIndex(seed, pool.length)];
   }
 
   const totalWeight = entries.reduce((sum, e) => sum + e.weight, 0);
-  const rand = mulberry32(dayOfYear);
+  const rand = mulberry32(seed);
   const roll = rand() * totalWeight;
 
   let cumulative = 0;
@@ -149,7 +192,7 @@ function pickTradition(dayOfYear: number, preferences?: TeachingPreferences): Te
 export function getNextTeachingForDay(dayOfYear: number, year: number, preferences?: TeachingPreferences): Teaching | null {
   const totalDays = getTotalDaysInYear(year);
   const nextDay = dayOfYear + 1 > totalDays ? 1 : dayOfYear + 1;
-  return getTeachingForDay(nextDay, preferences);
+  return getTeachingForDay(nextDay, preferences, 0, year);
 }
 
 /**
