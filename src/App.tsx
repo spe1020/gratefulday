@@ -7,6 +7,7 @@ import { InferSeoMetaPlugin } from '@unhead/addons';
 import { Suspense } from 'react';
 import NostrProvider from '@/components/NostrProvider';
 import { NostrSync } from '@/components/NostrSync';
+import { LoginPersistence } from '@/components/LoginPersistence';
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { NostrLoginProvider } from '@nostrify/react/login';
@@ -55,6 +56,7 @@ export function App() {
         <QueryClientProvider client={queryClient}>
           <NostrLoginProvider storageKey='nostr:login'>
             <NostrProvider>
+              <LoginPersistence />
               <NostrSync />
               <NWCProvider>
                 <TooltipProvider>
