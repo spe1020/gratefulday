@@ -19,9 +19,10 @@ export function useWallet() {
   const webln = (globalThis as { webln?: WebLNProvider }).webln || null;
 
   // Calculate status values reactively
-  const hasNWC = useMemo(() => {
-    return connections.length > 0 && connections.some(c => c.isConnected);
-  }, [connections]);
+  // A stored wallet counts as available. `isConnected` only reflects a live
+  // probe this session, so requiring it would report "no wallet" after every
+  // reload for a perfectly good connection.
+  const hasNWC = useMemo(() => connections.length > 0, [connections]);
 
   // Determine preferred payment method
   const preferredMethod: WalletStatus['preferredMethod'] = activeNWC
