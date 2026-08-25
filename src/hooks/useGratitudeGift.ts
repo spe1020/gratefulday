@@ -7,9 +7,18 @@ import { useAppContext } from '@/hooks/useAppContext';
 import { nip57 } from 'nostr-tools';
 import type { Event } from 'nostr-tools';
 import { useNostr } from '@nostrify/react';
-import type { NostrEvent } from '@nostrify/nostrify';
 import { openInvoiceInWalletApp, getWalletAppInfo } from '@/lib/walletApps';
 import { selectRandomZapper } from '@/services/zapDetector';
+
+// Recent recipients stay in memory only for the session — persisting who the
+// user paid to localStorage leaks their payment graph. Module-level so the
+// list survives modal remounts. Any legacy plaintext list is scrubbed.
+let recentRecipients: string[] = [];
+try {
+  localStorage.removeItem('gratitudeGift_recentRecipients');
+} catch {
+  // localStorage unavailable — nothing to scrub
+}
 
 /**
  * Hook for sending anonymous gratitude gifts (zaps) to random Nostr users
@@ -24,59 +33,30 @@ export function useGratitudeGift() {
   const { nostr } = useNostr();
 
   /**
-   * Helper function to publish zap request to relays (non-blocking)
-   */
-  const publishZapRequest = async (zapRequest: unknown) => {
-    try {
-      await nostr.event(zapRequest as NostrEvent, { signal: AbortSignal.timeout(5000) });
-    } catch (error) {
-      // Payment succeeded but publishing failed - log but don't fail
-      console.warn('Payment succeeded but failed to publish zap request to relays:', error);
-    }
-  };
-
-  /**
-   * Get recent recipients (last 5) from localStorage to avoid repeating
+   * Get recent recipients (last 5) to avoid repeating
    */
   const getRecentRecipients = useCallback((): string[] => {
-    try {
-      const stored = localStorage.getItem('gratitudeGift_recentRecipients');
-      if (stored) {
-        return JSON.parse(stored);
-      }
-      return [];
-    } catch {
-      return [];
-    }
+    return [...recentRecipients];
   }, []);
 
   /**
    * Save a recipient to the recent recipients list (keeps last 5)
    */
   const saveRecentRecipient = (pubkey: string): void => {
-    try {
-      const recent = getRecentRecipients();
-      // Remove if already exists
-      const filtered = recent.filter(p => p !== pubkey);
-      // Add to front
-      filtered.unshift(pubkey);
-      // Keep only last 5
-      const toStore = filtered.slice(0, 5);
-      localStorage.setItem('gratitudeGift_recentRecipients', JSON.stringify(toStore));
-    } catch (error) {
-      console.warn('Failed to save recent recipient:', error);
-    }
+    const filtered = recentRecipients.filter(p => p !== pubkey);
+    filtered.unshift(pubkey);
+    recentRecipients = filtered.slice(0, 5);
   };
 
   /**
    * Select a random active Nostr pubkey using zap detector logic
-   * Queries multiple relays for zap receipts, filters for valid zaps (> 10 sats),
-   * and randomly selects a zapper
+   * Queries the app relay pool for zap receipts, validates them (signatures +
+   * embedded zap request), and randomly selects a zapper
    * Excludes recent recipients to avoid zapping the same person repeatedly
    */
-  const selectRandomRecipient = useCallback(async (): Promise<{ 
-    pubkey: string; 
-    profileEvent: unknown; 
+  const selectRandomRecipient = useCallback(async (): Promise<{
+    pubkey: string;
+    profileEvent: unknown;
     profileData: unknown;
     lightningAddress: string;
   } | null> => {
@@ -86,29 +66,25 @@ export function useGratitudeGift() {
         ...(user?.pubkey ? [user.pubkey] : []),
         ...getRecentRecipients()
       ];
-      
-      console.log(`[GratitudeGift] Using zap detector to find random zapper (excluding ${excludePubkeys.length} pubkeys)`);
-      
-      // Use zap detector to select random zapper
-      const selectedZapper = await selectRandomZapper(7, excludePubkeys);
-      
+
+      // Use zap detector to select random zapper via the app relay pool
+      const selectedZapper = await selectRandomZapper(nostr, 7, excludePubkeys);
+
       if (!selectedZapper) {
-        console.log('[GratitudeGift] No valid zappers found');
         return null;
       }
-      
+
       // Fetch profile for the selected zapper
       const profileSignal = AbortSignal.timeout(5000);
       const profileEvents = await nostr.query(
         [{ kinds: [0], authors: [selectedZapper.zapperPubkey], limit: 1 }],
         { signal: profileSignal }
       );
-      
+
       if (profileEvents.length === 0) {
-        console.log('[GratitudeGift] Could not fetch profile for selected zapper');
         return null;
       }
-      
+
       const profileEvent = profileEvents[0];
       let profileData: Record<string, unknown> = {};
       try {
@@ -116,16 +92,13 @@ export function useGratitudeGift() {
       } catch {
         // Invalid JSON, continue with empty profile
       }
-      
+
       // Check for lightning address
       const lightningAddress = (profileData.lud16 as string) || (profileData.lud06 as string);
       if (!lightningAddress) {
-        console.log('[GratitudeGift] Selected zapper has no lightning address');
         return null;
       }
-      
-      console.log(`[GratitudeGift] Selected zapper: ${selectedZapper.zapperNpub.substring(0, 16)}...`);
-      
+
       return {
         pubkey: selectedZapper.zapperPubkey,
         profileEvent,
@@ -133,47 +106,43 @@ export function useGratitudeGift() {
         lightningAddress,
       };
     } catch (error) {
-      console.error('Error selecting random recipient:', error);
+      if (import.meta.env.DEV) {
+        console.error('Error selecting random recipient:', error);
+      }
       return null;
     }
   }, [nostr, user?.pubkey, getRecentRecipients]);
 
   /**
-   * Check if an invoice has been paid by querying the zap endpoint
-   * Tries multiple methods to verify payment status
+   * Check whether a zap receipt (kind 9735) for this invoice has appeared on
+   * the relays — the LNURL server publishes one once the invoice is paid.
    */
-  const checkInvoiceStatus = async (zapEndpoint: string, invoice: string): Promise<boolean> => {
+  const findZapReceipt = useCallback(async (
+    invoice: string,
+    signedZapRequest: unknown
+  ): Promise<boolean> => {
     try {
-      // Method 1: Try to check invoice status via the zap endpoint
-      // Some LNURL endpoints support checking invoice status
-      try {
-        const response = await fetch(`${zapEndpoint}/check/${encodeURIComponent(invoice)}`, {
-          method: 'GET',
-          headers: { 'Accept': 'application/json' },
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          if (data.paid === true || data.settled === true) {
-            return true;
-          }
-        }
-      } catch {
-        // Endpoint doesn't support status checking, try next method
-      }
+      const request = signedZapRequest as Event | undefined;
+      const recipientPubkey = request?.tags?.find(t => t[0] === 'p')?.[1];
+      if (!recipientPubkey || !request) return false;
 
-      // Method 2: Extract payment hash for potential future use
-      // Note: Most LNURL endpoints don't support payment hash lookup
-      // This is kept for potential future service-specific implementations
-      
-      // Since we can't reliably check invoice status without service-specific APIs,
-      // we return false and let polling continue. Users can manually confirm payment.
-      return false;
-    } catch (error) {
-      console.debug('Invoice status check error:', error);
+      const events = await nostr.query(
+        [{
+          kinds: [9735],
+          '#p': [recipientPubkey],
+          since: request.created_at - 60,
+          limit: 50,
+        }],
+        { signal: AbortSignal.timeout(5000) }
+      );
+
+      return events.some(event =>
+        event.tags.some(t => t[0] === 'bolt11' && t[1] === invoice)
+      );
+    } catch {
       return false;
     }
-  };
+  }, [nostr]);
 
   /**
    * Send a gratitude gift (zap) to a random Nostr user
@@ -183,7 +152,7 @@ export function useGratitudeGift() {
    * @returns Object with success status and invoice info if manual payment needed
    */
   const sendGratitudeGift = async (
-    amount: number, 
+    amount: number,
     message?: string
   ): Promise<{ success: boolean; invoice?: string; zapEndpoint?: string; signedZapRequest?: unknown }> => {
     if (!user) {
@@ -195,7 +164,7 @@ export function useGratitudeGift() {
       return { success: false };
     }
 
-    if (amount <= 0) {
+    if (!Number.isFinite(amount) || amount <= 0) {
       toast({
         title: 'Invalid amount',
         description: 'Please select a valid amount.',
@@ -221,7 +190,7 @@ export function useGratitudeGift() {
       }
 
       const { pubkey: recipientPubkey, profileEvent } = recipient;
-      
+
       // Save this recipient to recent recipients list to avoid zapping them again soon
       saveRecentRecipient(recipientPubkey);
 
@@ -242,15 +211,15 @@ export function useGratitudeGift() {
       const defaultMessage = "A random zap of kindness, sent your way today 💜";
       const baseMessage = message || defaultMessage;
       // Ensure website URL is included (append if not already present)
-      const gratitudeMessage = baseMessage.includes("gratefulday.space") 
-        ? baseMessage 
+      const gratitudeMessage = baseMessage.includes("gratefulday.space")
+        ? baseMessage
         : `${baseMessage}\nhttps://gratefulday.space`;
-      
-      // Get relay URLs for publishing zap request
+
+      // Relays where the recipient's LNURL server should publish the 9735 receipt
       const relayUrls = config.relayMetadata.relays
         .filter(r => r.write)
         .map(r => r.url);
-      
+
       const zapRequest = nip57.makeZapRequest({
         profile: recipientPubkey,
         event: null, // No event reference - profile zap
@@ -259,12 +228,14 @@ export function useGratitudeGift() {
         comment: gratitudeMessage,
       });
 
-      // Sign the zap request
+      // Sign the zap request. Per NIP-57 it goes only to the LNURL callback —
+      // publishing it to relays would leak payment intent; the 9735 receipt is
+      // the recipient's notification.
       const signedZapRequest = await user.signer.signEvent(zapRequest);
 
       // Get invoice from zap endpoint
       const res = await fetch(
-        `${zapEndpoint}?amount=${zapAmount}&nostr=${encodeURI(JSON.stringify(signedZapRequest))}`
+        `${zapEndpoint}?amount=${zapAmount}&nostr=${encodeURIComponent(JSON.stringify(signedZapRequest))}`
       );
 
       if (!res.ok) {
@@ -281,18 +252,12 @@ export function useGratitudeGift() {
       // Pay the invoice
       const currentNWCConnection = getActiveConnection();
 
-      // Helper to handle successful payment
-      const handlePaymentSuccess = async () => {
-        await publishZapRequest(signedZapRequest);
-        setIsSending(false);
-        return { success: true };
-      };
-
       // Try NWC first
-      if (currentNWCConnection?.connectionString && currentNWCConnection.isConnected) {
+      if (currentNWCConnection?.connectionString) {
         try {
           await sendPayment(currentNWCConnection, invoice);
-          return await handlePaymentSuccess();
+          setIsSending(false);
+          return { success: true };
         } catch (nwcError) {
           console.error('NWC payment failed, falling back:', nwcError);
         }
@@ -313,7 +278,8 @@ export function useGratitudeGift() {
             }
           }
           await webLnProvider.sendPayment(invoice);
-          return await handlePaymentSuccess();
+          setIsSending(false);
+          return { success: true };
         } catch (weblnError) {
           console.error('WebLN payment failed, falling back to manual payment:', weblnError);
           // Fall through to manual payment option
@@ -356,46 +322,28 @@ export function useGratitudeGift() {
   };
 
   /**
-   * Verify payment and publish zap request after manual payment
-   * @param forcePublish - If true, publish zap request even if payment can't be verified (user confirmed payment)
+   * Verify a manual payment by looking for its kind-9735 receipt on relays.
+   * Nothing is published here — per NIP-57 the LNURL server publishes the
+   * receipt; this only confirms it exists.
+   * @param userConfirmed - The user pressed "I've paid". Their say-so still
+   *   triggers a real receipt lookup; it only decides what we do when no
+   *   receipt is found (accept it rather than keep waiting), so the UI never
+   *   claims a payment was verified when nothing was checked.
    */
-  const verifyAndPublishPayment = async (
+  const verifyAndPublishPayment = useCallback(async (
     invoice: string,
-    zapEndpoint: string,
+    _zapEndpoint: string,
     signedZapRequest: unknown,
-    forcePublish: boolean = false
+    userConfirmed: boolean = false
   ): Promise<boolean> => {
-    try {
-      // Check if invoice is paid
-      const isPaid = await checkInvoiceStatus(zapEndpoint, invoice);
-      
-      if (isPaid || forcePublish) {
-        await publishZapRequest(signedZapRequest);
-        return true;
-      }
-      
-      return false;
-    } catch (error) {
-      console.error('Payment verification error:', error);
-      // If force publish, still try to publish
-      if (forcePublish) {
-        try {
-          await publishZapRequest(signedZapRequest);
-          return true;
-        } catch (publishError) {
-          console.error('Failed to publish zap request:', publishError);
-        }
-      }
-      return false;
-    }
-  };
+    const found = await findZapReceipt(invoice, signedZapRequest);
+    return found || userConfirmed;
+  }, [findZapReceipt]);
 
   return {
     sendGratitudeGift,
     verifyAndPublishPayment,
-    checkInvoiceStatus,
     isSending,
     selectRandomRecipient,
   };
 }
-

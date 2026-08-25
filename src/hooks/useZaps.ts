@@ -5,8 +5,63 @@ import { useAppContext } from '@/hooks/useAppContext';
 import { useToast } from '@/hooks/useToast';
 import { useNWC } from '@/hooks/useNWCContext';
 import type { NWCConnection } from '@/hooks/useNWC';
-import { nip57 } from 'nostr-tools';
+import { nip57, verifyEvent } from 'nostr-tools';
 import type { Event } from 'nostr-tools';
+
+/** Parse a millisat amount tag; null when absent or unusable. */
+function msatFromTag(tags: string[][] | undefined): number | null {
+  const raw = tags?.find(([name]) => name === 'amount')?.[1];
+  if (!raw) return null;
+  const millisats = Number(raw);
+  return Number.isFinite(millisats) && millisats > 0 ? millisats : null;
+}
+
+/**
+ * The amount a zap receipt actually represents, in millisats, or null if it
+ * can't be trusted as a payment.
+ *
+ * The bolt11 invoice is preferred, but its parse is not treated as
+ * mandatory: nostr-tools returns fractional sats for `n`/`p` multipliers and
+ * 0 for non-mainnet invoices, so requiring an exact integer-sat match against
+ * the amount tags discarded legitimate zaps. Where both a decoded invoice and
+ * a tag exist they must agree within one sat — a real mismatch is a forgery
+ * signal and still drops the receipt.
+ */
+function receiptAmountMsat(receipt: Event, request: Event): number | null {
+  const bolt11 = receipt.tags.find(([name]) => name === 'bolt11')?.[1];
+  if (!bolt11) return null; // no invoice at all: not a payment
+
+  let invoiceMsat: number | null = null;
+  try {
+    const sats = nip57.getSatoshisAmountFromBolt11(bolt11);
+    if (Number.isFinite(sats) && sats > 0) invoiceMsat = Math.round(sats * 1000);
+  } catch {
+    invoiceMsat = null;
+  }
+
+  const receiptMsat = msatFromTag(receipt.tags);
+  const requestMsat = msatFromTag(request.tags);
+  const tagMsat = receiptMsat ?? requestMsat;
+
+  // Tags that contradict each other, or a tag that contradicts the invoice.
+  const TOLERANCE_MSAT = 1000; // one sat
+  if (
+    receiptMsat !== null &&
+    requestMsat !== null &&
+    Math.abs(receiptMsat - requestMsat) > TOLERANCE_MSAT
+  ) {
+    return null;
+  }
+  if (
+    invoiceMsat !== null &&
+    tagMsat !== null &&
+    Math.abs(invoiceMsat - tagMsat) > TOLERANCE_MSAT
+  ) {
+    return null;
+  }
+
+  return invoiceMsat ?? tagMsat;
+}
 import type { WebLNProvider } from '@webbtc/webln-types';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNostr } from '@nostrify/react';
@@ -45,7 +100,7 @@ export function useZaps(
     staleTime: 30000, // 30 seconds
     refetchInterval: (query) => {
       // Only refetch if the query is currently being observed (component is mounted)
-      return query.getObserversCount() > 0 ? 60000 : false;
+      return query.getObserversCount() > 0 ? 180000 : false;
     },
     queryFn: async (c) => {
       if (!actualTarget) return [];
@@ -59,6 +114,7 @@ export function useZaps(
         const events = await nostr.query([{
           kinds: [9735],
           '#a': [`${actualTarget.kind}:${actualTarget.pubkey}:${identifier}`],
+          limit: 100,
         }], { signal });
         return events;
       } else {
@@ -66,6 +122,7 @@ export function useZaps(
         const events = await nostr.query([{
           kinds: [9735],
           '#e': [actualTarget.id],
+          limit: 100,
         }], { signal });
         return events;
       }
@@ -73,7 +130,37 @@ export function useZaps(
     enabled: !!actualTarget?.id,
   });
 
-  // Process zap events into simple counts and totals
+  // The author's LNURL server pubkey — the only key allowed to issue zap
+  // receipts for them (NIP-57 appendix E). Null when unobtainable.
+  const lud16 = author.data?.metadata?.lud16;
+  const { data: lnurlNostrPubkey } = useQuery<string | null>({
+    queryKey: ['lnurl-nostr-pubkey', lud16 ?? ''],
+    enabled: !!lud16,
+    staleTime: 60 * 60 * 1000,
+    retry: 1,
+    queryFn: async () => {
+      const [name, domain] = (lud16 as string).split('@');
+      if (!name || !domain) return null;
+      try {
+        const res = await fetch(`https://${domain}/.well-known/lnurlp/${name}`, {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data.allowsNostr && typeof data.nostrPubkey === 'string'
+          ? data.nostrPubkey.toLowerCase()
+          : null;
+      } catch {
+        return null;
+      }
+    },
+  });
+
+  // Process zap events into simple counts and totals. Receipt fields are
+  // attacker-controlled, so each receipt is validated: the embedded zap
+  // request must verify (nip57.validateZapRequest), the bolt11-decoded amount
+  // is authoritative and must agree with the amount tags, and — where the
+  // author's LNURL nostrPubkey is known — the receipt must be issued by it.
   const { zapCount, totalSats, zaps } = useMemo(() => {
     if (!zapEvents || !Array.isArray(zapEvents) || !actualTarget) {
       return { zapCount: 0, totalSats: 0, zaps: [] };
@@ -81,54 +168,39 @@ export function useZaps(
 
     let count = 0;
     let sats = 0;
+    const validZaps: NostrEvent[] = [];
 
     zapEvents.forEach(zap => {
-      count++;
-
-      // Try multiple methods to extract the amount:
-
-      // Method 1: amount tag (from zap request, sometimes copied to receipt)
-      const amountTag = zap.tags.find(([name]) => name === 'amount')?.[1];
-      if (amountTag) {
-        const millisats = parseInt(amountTag);
-        sats += Math.floor(millisats / 1000);
+      // Receipt issuer must be the author's LNURL server, when known
+      if (lnurlNostrPubkey && zap.pubkey.toLowerCase() !== lnurlNostrPubkey) {
         return;
       }
 
-      // Method 2: Extract from bolt11 invoice
-      const bolt11Tag = zap.tags.find(([name]) => name === 'bolt11')?.[1];
-      if (bolt11Tag) {
-        try {
-          const invoiceSats = nip57.getSatoshisAmountFromBolt11(bolt11Tag);
-          sats += invoiceSats;
-          return;
-        } catch (error) {
-          console.warn('Failed to parse bolt11 amount:', error);
-        }
-      }
-
-      // Method 3: Parse from description (zap request JSON)
+      // The embedded zap request must be present and validly signed.
+      // Deliberately NOT nip57.validateZapRequest: it also requires a `relays`
+      // tag, which plenty of legitimate zappers omit, and rejecting those
+      // would quietly erase real zaps from the total.
       const descriptionTag = zap.tags.find(([name]) => name === 'description')?.[1];
-      if (descriptionTag) {
-        try {
-          const zapRequest = JSON.parse(descriptionTag);
-          const requestAmountTag = zapRequest.tags?.find(([name]: string[]) => name === 'amount')?.[1];
-          if (requestAmountTag) {
-            const millisats = parseInt(requestAmountTag);
-            sats += Math.floor(millisats / 1000);
-            return;
-          }
-        } catch (error) {
-          console.warn('Failed to parse description JSON:', error);
-        }
-      }
+      if (!descriptionTag) return;
 
-      console.warn('Could not extract amount from zap receipt:', zap.id);
+      let request: Event;
+      try {
+        request = JSON.parse(descriptionTag) as Event;
+      } catch {
+        return;
+      }
+      if (request.kind !== 9734 || !verifyEvent(request)) return;
+
+      const amountMsat = receiptAmountMsat(zap, request);
+      if (amountMsat === null) return;
+
+      count++;
+      sats += amountMsat / 1000;
+      validZaps.push(zap);
     });
 
-
-    return { zapCount: count, totalSats: sats, zaps: zapEvents };
-  }, [zapEvents, actualTarget]);
+    return { zapCount: count, totalSats: sats, zaps: validZaps };
+  }, [zapEvents, actualTarget, lnurlNostrPubkey]);
 
   const zap = async (amount: number, comment: string) => {
     if (amount <= 0) {
@@ -216,7 +288,9 @@ export function useZaps(
       const signedZapRequest = await user.signer.signEvent(zapRequest);
 
       try {
-        const res = await fetch(`${zapEndpoint}?amount=${zapAmount}&nostr=${encodeURI(JSON.stringify(signedZapRequest))}`);
+        // encodeURIComponent, not encodeURI: a comment containing & = + or #
+        // would otherwise break out of the query parameter.
+        const res = await fetch(`${zapEndpoint}?amount=${zapAmount}&nostr=${encodeURIComponent(JSON.stringify(signedZapRequest))}`);
             const responseData = await res.json();
 
             if (!res.ok) {
@@ -231,8 +305,11 @@ export function useZaps(
             // Get the current active NWC connection dynamically
             const currentNWCConnection = getActiveConnection();
 
-            // Try NWC first if available and properly connected
-            if (currentNWCConnection && currentNWCConnection.connectionString && currentNWCConnection.isConnected) {
+            // Try NWC first when one is configured. `isConnected` is a live
+            // probe hint, not a persisted fact — it is false for every
+            // connection restored from storage, so gating on it here would
+            // skip NWC forever after a reload.
+            if (currentNWCConnection && currentNWCConnection.connectionString) {
               try {
                 await sendPayment(currentNWCConnection, newInvoice);
 
