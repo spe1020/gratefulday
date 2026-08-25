@@ -13,11 +13,16 @@ import './index.css';
 // Register Service Worker for PWA (only in production)
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
+    // The build id in the query string is what makes each deploy a NEW worker:
+    // sw.js is byte-identical between builds, so registering the bare URL left
+    // returning users on the old worker (and its stale index.html) forever.
     navigator.serviceWorker
-      .register('/sw.js')
+      .register(`${import.meta.env.BASE_URL}sw.js?v=${__BUILD_ID__}`)
       .then((registration) => {
-        console.log('Service Worker registered:', registration.scope);
-        
+        if (import.meta.env.DEV) {
+          console.log('Service Worker registered:', registration.scope);
+        }
+
         // Check for updates periodically
         setInterval(() => {
           registration.update();
