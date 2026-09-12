@@ -22,7 +22,11 @@ import {
 import { Button } from '@/components/ui/button';
 import { Globe, Loader2, Lock, Pencil, Plus, Save, Sparkles, Share2, Trash2, X } from 'lucide-react';
 import type { DayInfo } from '@/lib/gratitudeUtils';
-import { getQuoteForDay, getAffirmationForDay, formatDisplayDate } from '@/lib/gratitudeUtils';
+import { getAffirmationForDay, formatDisplayDate } from '@/lib/gratitudeUtils';
+import { getDailyWisdom, getWisdomForDate, getWisdomPrompt } from '@/lib/wisdom';
+import { getWisdomHistory, linkWisdomReflection, recordWisdomInteraction, removeWisdomContext } from '@/lib/wisdomStore';
+import { useWisdomHistory } from '@/hooks/useWisdomHistory';
+import { ReflectOnWisdom } from './WisdomReflectionSheet';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useNostrPublish, SignerTimeoutError } from '@/hooks/useNostrPublish';
 import { useGratitudeEntry } from '@/hooks/useGratitudeEntries';
@@ -39,7 +43,7 @@ import {
 } from '@/lib/privacyUtils';
 import type { NostrEvent, NostrSigner } from '@nostrify/nostrify';
 import { dedupeEntriesByDTag } from '@/lib/streakUtils';
-import { joinNotes, splitNotes } from '@/lib/entryNotes';
+import { joinNotes, normalizeNotes, splitNotes } from '@/lib/entryNotes';
 import { useToast } from '@/hooks/useToast';
 import LoginDialog from './auth/LoginDialog';
 import { nip19 } from 'nostr-tools';
@@ -48,6 +52,7 @@ interface DayDetailDialogProps {
   day: DayInfo | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  focusWisdom?: boolean;
 }
 
 /**
@@ -179,7 +184,10 @@ function extractMentionedPubkeys(text: string): string[] {
   return Array.from(pubkeys);
 }
 
-export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProps) {
+export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }: DayDetailDialogProps) {
+  const { interactions, storageUnavailable } = useWisdomHistory();
+  const wisdomContexts = interactions.filter((item) => item.date === day?.dateString && item.active);
+  const needsWisdomDraft = focusWisdom || wisdomContexts.some((item) => !item.reflection);
   // Each note is its own item (published card or draft box); the day still
   // saves as one 36669. Stable ids key the list and target focus.
   const [notes, setNotes] = useState<NoteState[]>([
@@ -205,6 +213,18 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   const [showNip44Hint, setShowNip44Hint] = useState(false);
   const [showShareGuard, setShowShareGuard] = useState(false);
   const { user } = useCurrentUser();
+  const ownerPubkey = user?.pubkey;
+  const wisdomOwnerRef = useRef(ownerPubkey);
+  useEffect(() => {
+    const wasGuest = !wisdomOwnerRef.current;
+    wisdomOwnerRef.current = ownerPubkey;
+    if (!open || !wasGuest || !ownerPubkey || !day) return;
+    // Adopt only context explicitly selected for this open guest draft when
+    // the user signs in to save it. Never merge the anonymous browsing history.
+    getWisdomHistory().filter((item) => item.date === day.dateString && item.active).forEach((item) => {
+      recordWisdomInteraction(ownerPubkey, item.wisdom, day.dateString, 'added');
+    });
+  }, [open, ownerPubkey, day]);
   const { supported: nip44Supported } = useNip44Support();
   const { settings: appSettings, updateSettings: updateAppSettings } = useAppSettings();
   // Snapshot of the synced privacy default, read non-reactively when the dialog
@@ -218,11 +238,14 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // Fetch existing entry for this day (only for display in past days, not for editing)
-  const { data: existingEntry } = useGratitudeEntry(
+  // Until the initial query settles, undefined means unknown, not an empty day.
+  const entryQuery = useGratitudeEntry(
     user?.pubkey,
     day?.dateString || ''
   );
+  const { data: existingEntry } = entryQuery;
+  const entryQueryPending = !!user && entryQuery.isPending;
+  const entryQueryFailed = !!user && entryQuery.isError && existingEntry === undefined;
   const {
     content: entryContent,
     isEncrypted: entryIsEncrypted,
@@ -237,18 +260,27 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   // failure leaves the editor empty AND save/share disabled, so a blank box can
   // never silently overwrite content the user can't currently read.
   const seededKeyRef = useRef<string | null>(null);
+  const savedContentRef = useRef('');
   useEffect(() => {
     if (!open) {
       seededKeyRef.current = null;
       return;
     }
 
+    // Keep any guest draft intact while sign-in discovers the saved day. Do
+    // not seed a placeholder for an unknown signed-in day, or later treat it
+    // as a user-created draft when the entry arrives.
+    if (entryQueryPending) return;
+
     const key = `${day?.dateString ?? ''}:${existingEntry?.id ?? 'none'}`;
     if (seededKeyRef.current === key) return;
 
     if (!existingEntry) {
       // No saved entry: a single fresh empty draft box (seeded once).
-      setNotes([makeNote('', 'draft')]);
+      const note = makeNote('', 'draft');
+      if (needsWisdomDraft) pendingFocusIdRef.current = note.id;
+      setNotes([note]);
+      savedContentRef.current = '';
       seededKeyRef.current = key;
       return;
     }
@@ -267,16 +299,22 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     // Successful decrypt or plaintext passthrough: stored notes seed as
     // published cards (one per note); empty entry falls back to a draft box.
     const seeded = splitNotes(entryContent);
-    setNotes(
-      seeded.length > 0
-        ? seeded.map((text) => makeNote(text, 'published'))
-        : [makeNote('', 'draft')]
-    );
+    const pendingDrafts = seededKeyRef.current === `${day?.dateString}:none`
+      ? notes.filter((note) => note.status === 'draft') : [];
+    const initialNotes = [...seeded.map((text) => makeNote(text, 'published')), ...pendingDrafts];
+    if (pendingDrafts.length > 0) pendingFocusIdRef.current = pendingDrafts[0].id;
+    if (initialNotes.length === 0 || (!day?.isPast && needsWisdomDraft && pendingDrafts.length === 0)) {
+      const draft = makeNote('', 'draft');
+      if (needsWisdomDraft) pendingFocusIdRef.current = draft.id;
+      initialNotes.push(draft);
+    }
+    setNotes(initialNotes);
+    savedContentRef.current = joinNotes(seeded);
     seededKeyRef.current = key;
     // Keyed on existingEntry?.id, not the object: a background refetch that
     // returns an identity-changed-but-same entry must not re-fire seeding.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, day?.dateString, existingEntry?.id, isDecrypting, decryptError, entryContent]);
+  }, [open, day?.dateString, entryQueryPending, existingEntry?.id, isDecrypting, decryptError, entryContent]);
 
   // Focus the box for the pending note id once it has mounted as a draft.
   // Runs after every commit (cheap ref check); Add and Edit set the target id,
@@ -325,7 +363,8 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   if (!day) return null;
 
   const year = day.date.getFullYear();
-  const quote = getQuoteForDay(day.dayOfYear, year);
+  const quote = getDailyWisdom(day.date);
+  const wisdom = getWisdomForDate(day.date);
   const affirmation = getAffirmationForDay(day.dayOfYear, year);
   const isPastDay = day.isPast;
 
@@ -333,9 +372,9 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   // has been decrypted and seeded. While decrypting we show a loading state;
   // when decryption failed we lock the editor entirely (no blank-overwrite path).
   const hasExistingEntry = !!existingEntry;
-  const entrySeeding = hasExistingEntry && isDecrypting;
+  const entrySeeding = entryQueryPending || (hasExistingEntry && isDecrypting);
   const entryLocked = hasExistingEntry && !!decryptError;
-  const blockSaveShare = entrySeeding || entryLocked;
+  const blockSaveShare = entrySeeding || entryLocked || entryQueryFailed || entryQuery.isFetching;
 
   // A day can hold multiple notes inside the one entry. The saved content is
   // the non-empty notes joined; empty draft boxes are dropped by joinNotes.
@@ -379,7 +418,12 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   // saved note as a published card. Publishing doesn't invalidate the entry
   // query, so we flip optimistically and advance the seed latch to the new
   // event id (a later refetch with that id then won't re-seed).
-  const markEntryPublished = (savedContent: string, newEventId: string) => {
+  const markEntryPublished = (savedContent: string, newEventId: string, hasNewWriting: boolean) => {
+    if (user) {
+      linkWisdomReflection(user.pubkey, day.dateString, newEventId,
+        wisdomContexts.map((item) => item.wisdom.id), hasNewWriting);
+    }
+    savedContentRef.current = normalizeNotes(savedContent);
     const published = splitNotes(savedContent).map((text) =>
       makeNote(text, 'published')
     );
@@ -523,6 +567,9 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
       return;
     }
 
+    // Capture actual content changes before async encryption/publishing. Merely
+    // entering Edit mode, or normalizing whitespace, isn't new reflection text.
+    const hasNewWriting = normalizeNotes(joinedNotes) !== savedContentRef.current;
     let entryEvent;
     try {
       entryEvent = await buildEntryEvent();
@@ -551,7 +598,7 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
             : 'Your reflection has been saved.',
         });
         // Whole entry is now committed — every note becomes a published card.
-        markEntryPublished(savedContent, data.id);
+        markEntryPublished(savedContent, data.id, hasNewWriting);
         // Instant streak/calendar/heatmap/milestone refresh (no refetch).
         cacheSavedEntry(data);
       },
@@ -585,6 +632,7 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     // Share posts all of the day's notes (blank-line separated) — NoteContent
     // renders them as paragraphs in the feed and other clients.
     const trimmedText = joinedNotes;
+    const hasNewWriting = normalizeNotes(trimmedText) !== savedContentRef.current;
 
     // First, save as kind 36669 (encrypted when Private is selected — the
     // kind 1 note below still shares the plaintext by explicit user action).
@@ -609,7 +657,7 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
         onSuccess: (data) => {
           // The journal entry is committed — reflect published cards now (the
           // separate kind 1 share below doesn't affect the entry's state).
-          markEntryPublished(trimmedText, data.id);
+          markEntryPublished(trimmedText, data.id, hasNewWriting);
           // Instant streak/calendar/heatmap/milestone refresh (no refetch).
           cacheSavedEntry(data);
 
@@ -626,8 +674,8 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
           // Format the content for the kind 1 note
           const noteContent = `Day ${day.dayOfYear} ${dayEmoji}
 
-✨ "${quote.text}"
-— ${quote.author}
+✨ ${wisdom?.provenance?.wording === 'adaptation' ? quote.text : `"${quote.text}"`}
+— ${wisdom?.provenance?.wording === 'adaptation' ? 'After ' : ''}${quote.author}
 
 💫 "${affirmation}"
 
@@ -790,11 +838,16 @@ https://gratefulday.space`;
                     Daily Wisdom
                   </p>
                   <p className="text-base italic text-amber-800 dark:text-amber-200">
-                    "{quote.text}"
+                    {wisdom?.provenance?.wording === 'adaptation' ? quote.text : `"${quote.text}"`}
                   </p>
                   <p className="text-sm text-amber-700 dark:text-amber-300">
-                    — {quote.author}
+                    — {wisdom?.provenance?.wording === 'adaptation' && 'After '}{quote.author}
                   </p>
+                  {wisdom && <ReflectOnWisdom wisdom={wisdom} date={day.dateString} onAdd={!isPastDay && !blockSaveShare ? () => {
+                    const draft = notes.find((note) => note.status === 'draft');
+                    if (draft) editorRefs.current.get(draft.id)?.focus();
+                    else addNote();
+                  } : undefined} />}
                 </div>
               </div>
             </div>
@@ -810,6 +863,15 @@ https://gratefulday.space`;
             </div>
 
             {/* Gratitude Entry */}
+            {wisdomContexts.length > 0 && <div className="space-y-4 border-l-2 border-amber-200 pl-4 dark:border-amber-800">
+              <p className="text-xs font-medium text-muted-foreground">Carried into this reflection</p>
+              {wisdomContexts.map(({ wisdom: context }) => <div key={context.id} className="space-y-1">
+                <p className="text-sm italic">{context.text}</p>
+                <p className="text-sm leading-relaxed">{getWisdomPrompt(context)}</p>
+                <button type="button" onClick={() => removeWisdomContext(user?.pubkey, day.dateString, context.id)} className="min-h-11 text-xs text-muted-foreground underline underline-offset-4">Remove wisdom context</button>
+              </div>)}
+              {storageUnavailable && <p className="text-xs text-muted-foreground">Wisdom context is available for this visit, but couldn't be saved on this device.</p>}
+            </div>}
             {isPastDay ? (
               /* Past Day - Read Only View */
               <div className="space-y-3">
@@ -878,8 +940,12 @@ https://gratefulday.space`;
                     </p>
                   )}
                 </div>
+                {entryQueryFailed && <p className="text-sm text-muted-foreground" role="status">
+                  Couldn't check for an existing reflection. Your draft is still here.{' '}
+                  <button type="button" className="min-h-11 underline underline-offset-4" onClick={() => void entryQuery.refetch()}>Try again</button>
+                </p>}
                 {entrySeeding ? (
-                  /* Existing entry still decrypting — don't seed or allow save yet. */
+                  /* Fetching or decrypting the saved day — don't allow save yet. */
                   <p className="flex items-center gap-2 text-sm text-muted-foreground p-3 border rounded-md min-h-[80px]">
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Loading your entry…

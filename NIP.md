@@ -2,6 +2,12 @@
 
 This document describes the custom event kinds used by the Daily Gratitude Calendar application.
 
+Daily Wisdom adds no event kinds or tags. Its optional interaction history is
+stored locally per account and references the existing daily entry address.
+Private entries retain NIP-44 self-encryption; wisdom context is not appended
+to their public metadata. See [Daily Wisdom](docs/DAILY_WISDOM.md) for storage,
+privacy limits, source provenance, and the future reflection-analysis foundation.
+
 ## Event Kinds
 
 ### Kind 36669: Daily Gratitude Entry

@@ -2,6 +2,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { DayInfo } from '@/lib/gratitudeUtils';
+import { YourWisdom } from './YourWisdom';
 
 interface PastDaysListProps {
   days: DayInfo[];
@@ -13,10 +14,6 @@ export function PastDaysList({ days, entriesByDate, onDayClick }: PastDaysListPr
   // Filter to only past days (not today, not future)
   const pastDays = days.filter((day) => day.isPast);
 
-  if (pastDays.length === 0) {
-    return null;
-  }
-
   return (
     <>
       {/* Subtle divider/gradient fade */}
@@ -27,11 +24,14 @@ export function PastDaysList({ days, entriesByDate, onDayClick }: PastDaysListPr
       </div>
 
       <div className="w-full max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="mb-6">
-          <h2 className="text-lg font-semibold text-foreground mb-2">Past Reflections</h2>
-          <p className="text-sm text-muted-foreground">
-            Browse your journey of thankfulness
-          </p>
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+          <div>
+            <h2 className="text-lg font-semibold text-foreground mb-2">Past Reflections</h2>
+            <p className="text-sm text-muted-foreground">
+              Browse your journey of thankfulness
+            </p>
+          </div>
+          <YourWisdom />
         </div>
 
       {/* Horizontal Carousel */}
@@ -103,4 +103,3 @@ export function PastDaysList({ days, entriesByDate, onDayClick }: PastDaysListPr
     </>
   );
 }
-

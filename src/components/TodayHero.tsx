@@ -4,15 +4,18 @@ import { Button } from '@/components/ui/button';
 import { Check, Heart } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { DayInfo } from '@/lib/gratitudeUtils';
-import { getQuoteForDay, getAffirmationForDay } from '@/lib/gratitudeUtils';
+import { getAffirmationForDay } from '@/lib/gratitudeUtils';
+import { getDailyWisdom, getWisdomForDate } from '@/lib/wisdom';
+import { ReflectOnWisdom } from './WisdomReflectionSheet';
 
 interface TodayHeroProps {
   day: DayInfo;
   onOpenDetail: (day: DayInfo) => void;
   totalDays: number;
+  onAddWisdom?: () => void;
 }
 
-export function TodayHero({ day, onOpenDetail, totalDays }: TodayHeroProps) {
+export function TodayHero({ day, onOpenDetail, totalDays, onAddWisdom }: TodayHeroProps) {
   const [, setIsHovered] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
   const [showCheckmark, setShowCheckmark] = useState(false);
@@ -39,7 +42,8 @@ export function TodayHero({ day, onOpenDetail, totalDays }: TodayHeroProps) {
   };
 
   const year = day.date.getFullYear();
-  const quote = getQuoteForDay(day.dayOfYear, year);
+  const quote = getDailyWisdom(day.date);
+  const wisdom = getWisdomForDate(day.date);
   const affirmation = getAffirmationForDay(day.dayOfYear, year);
   
   // Calculate progress for text display
@@ -151,11 +155,12 @@ export function TodayHero({ day, onOpenDetail, totalDays }: TodayHeroProps) {
                     Daily Wisdom
                   </p>
                   <p className="text-base sm:text-lg italic text-foreground leading-relaxed">
-                    "{quote.text}"
+                    {wisdom?.provenance?.wording === 'adaptation' ? quote.text : `"${quote.text}"`}
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    — {quote.author}
+                    — {wisdom?.provenance?.wording === 'adaptation' && 'After '}{quote.author}
                   </p>
+                  {wisdom && <ReflectOnWisdom wisdom={wisdom} date={day.dateString} onAdd={onAddWisdom ?? (() => onOpenDetail(day))} />}
                 </div>
               </div>
 
@@ -285,4 +290,3 @@ export function TodayHero({ day, onOpenDetail, totalDays }: TodayHeroProps) {
     </div>
   );
 }
-
