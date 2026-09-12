@@ -22,7 +22,11 @@ import {
 import { Button } from '@/components/ui/button';
 import { Globe, Loader2, Lock, Pencil, Plus, Save, Sparkles, Share2, Trash2, X } from 'lucide-react';
 import type { DayInfo } from '@/lib/gratitudeUtils';
-import { getQuoteForDay, getAffirmationForDay, formatDisplayDate } from '@/lib/gratitudeUtils';
+import { getAffirmationForDay, formatDisplayDate } from '@/lib/gratitudeUtils';
+import { getDailyWisdom, getWisdomForDate, getWisdomPrompt } from '@/lib/wisdom';
+import { getWisdomHistory, linkWisdomReflection, recordWisdomInteraction, removeWisdomContext } from '@/lib/wisdomStore';
+import { useWisdomHistory } from '@/hooks/useWisdomHistory';
+import { ReflectOnWisdom } from './WisdomReflectionSheet';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useNostrPublish, SignerTimeoutError } from '@/hooks/useNostrPublish';
 import { useGratitudeEntry } from '@/hooks/useGratitudeEntries';
@@ -48,6 +52,7 @@ interface DayDetailDialogProps {
   day: DayInfo | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  focusWisdom?: boolean;
 }
 
 /**
@@ -179,7 +184,10 @@ function extractMentionedPubkeys(text: string): string[] {
   return Array.from(pubkeys);
 }
 
-export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProps) {
+export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }: DayDetailDialogProps) {
+  const { interactions, storageUnavailable } = useWisdomHistory();
+  const wisdomContexts = interactions.filter((item) => item.date === day?.dateString && item.active);
+  const needsWisdomDraft = focusWisdom || wisdomContexts.some((item) => !item.reflection);
   // Each note is its own item (published card or draft box); the day still
   // saves as one 36669. Stable ids key the list and target focus.
   const [notes, setNotes] = useState<NoteState[]>([
@@ -205,6 +213,18 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   const [showNip44Hint, setShowNip44Hint] = useState(false);
   const [showShareGuard, setShowShareGuard] = useState(false);
   const { user } = useCurrentUser();
+  const ownerPubkey = user?.pubkey;
+  const wisdomOwnerRef = useRef(ownerPubkey);
+  useEffect(() => {
+    const wasGuest = !wisdomOwnerRef.current;
+    wisdomOwnerRef.current = ownerPubkey;
+    if (!open || !wasGuest || !ownerPubkey || !day) return;
+    // Adopt only context explicitly selected for this open guest draft when
+    // the user signs in to save it. Never merge the anonymous browsing history.
+    getWisdomHistory().filter((item) => item.date === day.dateString && item.active).forEach((item) => {
+      recordWisdomInteraction(ownerPubkey, item.wisdom, day.dateString, 'added');
+    });
+  }, [open, ownerPubkey, day]);
   const { supported: nip44Supported } = useNip44Support();
   const { settings: appSettings, updateSettings: updateAppSettings } = useAppSettings();
   // Snapshot of the synced privacy default, read non-reactively when the dialog
@@ -248,7 +268,9 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
 
     if (!existingEntry) {
       // No saved entry: a single fresh empty draft box (seeded once).
-      setNotes([makeNote('', 'draft')]);
+      const note = makeNote('', 'draft');
+      if (needsWisdomDraft) pendingFocusIdRef.current = note.id;
+      setNotes([note]);
       seededKeyRef.current = key;
       return;
     }
@@ -267,11 +289,15 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
     // Successful decrypt or plaintext passthrough: stored notes seed as
     // published cards (one per note); empty entry falls back to a draft box.
     const seeded = splitNotes(entryContent);
-    setNotes(
-      seeded.length > 0
-        ? seeded.map((text) => makeNote(text, 'published'))
-        : [makeNote('', 'draft')]
-    );
+    const pendingDrafts = seededKeyRef.current === `${day?.dateString}:none`
+      ? notes.filter((note) => note.status === 'draft' && note.text.trim()) : [];
+    const initialNotes = [...seeded.map((text) => makeNote(text, 'published')), ...pendingDrafts];
+    if (initialNotes.length === 0 || (!day?.isPast && needsWisdomDraft && pendingDrafts.length === 0)) {
+      const draft = makeNote('', 'draft');
+      if (needsWisdomDraft) pendingFocusIdRef.current = draft.id;
+      initialNotes.push(draft);
+    }
+    setNotes(initialNotes);
     seededKeyRef.current = key;
     // Keyed on existingEntry?.id, not the object: a background refetch that
     // returns an identity-changed-but-same entry must not re-fire seeding.
@@ -325,7 +351,8 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   if (!day) return null;
 
   const year = day.date.getFullYear();
-  const quote = getQuoteForDay(day.dayOfYear, year);
+  const quote = getDailyWisdom(day.date);
+  const wisdom = getWisdomForDate(day.date);
   const affirmation = getAffirmationForDay(day.dayOfYear, year);
   const isPastDay = day.isPast;
 
@@ -380,6 +407,11 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
   // query, so we flip optimistically and advance the seed latch to the new
   // event id (a later refetch with that id then won't re-seed).
   const markEntryPublished = (savedContent: string, newEventId: string) => {
+    if (user) {
+      linkWisdomReflection(user.pubkey, day.dateString, newEventId,
+        wisdomContexts.map((item) => item.wisdom.id),
+        notes.some((note) => note.status === 'draft' && note.text.trim().length > 0));
+    }
     const published = splitNotes(savedContent).map((text) =>
       makeNote(text, 'published')
     );
@@ -626,8 +658,8 @@ export function DayDetailDialog({ day, open, onOpenChange }: DayDetailDialogProp
           // Format the content for the kind 1 note
           const noteContent = `Day ${day.dayOfYear} ${dayEmoji}
 
-✨ "${quote.text}"
-— ${quote.author}
+✨ ${wisdom?.provenance?.wording === 'adaptation' ? quote.text : `"${quote.text}"`}
+— ${wisdom?.provenance?.wording === 'adaptation' ? 'After ' : ''}${quote.author}
 
 💫 "${affirmation}"
 
@@ -790,11 +822,16 @@ https://gratefulday.space`;
                     Daily Wisdom
                   </p>
                   <p className="text-base italic text-amber-800 dark:text-amber-200">
-                    "{quote.text}"
+                    {wisdom?.provenance?.wording === 'adaptation' ? quote.text : `"${quote.text}"`}
                   </p>
                   <p className="text-sm text-amber-700 dark:text-amber-300">
-                    — {quote.author}
+                    — {wisdom?.provenance?.wording === 'adaptation' && 'After '}{quote.author}
                   </p>
+                  {wisdom && <ReflectOnWisdom wisdom={wisdom} date={day.dateString} onAdd={!isPastDay && !blockSaveShare ? () => {
+                    const draft = notes.find((note) => note.status === 'draft');
+                    if (draft) editorRefs.current.get(draft.id)?.focus();
+                    else addNote();
+                  } : undefined} />}
                 </div>
               </div>
             </div>
@@ -810,6 +847,15 @@ https://gratefulday.space`;
             </div>
 
             {/* Gratitude Entry */}
+            {wisdomContexts.length > 0 && <div className="space-y-4 border-l-2 border-amber-200 pl-4 dark:border-amber-800">
+              <p className="text-xs font-medium text-muted-foreground">Carried into this reflection</p>
+              {wisdomContexts.map(({ wisdom: context }) => <div key={context.id} className="space-y-1">
+                <p className="text-sm italic">{context.text}</p>
+                <p className="text-sm leading-relaxed">{getWisdomPrompt(context)}</p>
+                {!isPastDay && <button type="button" onClick={() => removeWisdomContext(user?.pubkey, day.dateString, context.id)} className="min-h-11 text-xs text-muted-foreground underline underline-offset-4">Remove wisdom context</button>}
+              </div>)}
+              {storageUnavailable && <p className="text-xs text-muted-foreground">Wisdom context is available for this visit, but couldn't be saved on this device.</p>}
+            </div>}
             {isPastDay ? (
               /* Past Day - Read Only View */
               <div className="space-y-3">

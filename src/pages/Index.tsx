@@ -35,6 +35,12 @@ export default function Index() {
 
   const { user } = useCurrentUser();
   const { data: gratitudeEntries, isLoading } = useGratitudeEntries(user?.pubkey);
+  // Keep an open guest reflection mounted while login loads the account's
+  // entries. CalendarView handles isolation when leaving a signed-in account.
+  const [calendarReady, setCalendarReady] = useState(!isLoading);
+  useEffect(() => {
+    if (!isLoading) setCalendarReady(true);
+  }, [isLoading]);
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = searchParams.get('tab') || 'calendar';
 
@@ -213,7 +219,7 @@ export default function Index() {
         {/* Main Content Section */}
         <section className="w-full">
           <TabsContent value="calendar" className="mt-0">
-            {isLoading ? (
+            {isLoading && !calendarReady ? (
               <div className="w-full max-w-4xl mx-auto px-4 py-12">
                 <div className="space-y-4">
                   <Skeleton className="w-full h-[600px] rounded-lg" />

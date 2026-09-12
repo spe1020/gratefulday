@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { forwardRef, useImperativeHandle } from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { NostrEvent } from '@nostrify/nostrify';
 import type { DayInfo } from '@/lib/gratitudeUtils';
 import type { DecryptedEntry } from '@/hooks/useDecryptedEntry';
+import { DAILY_WISDOM } from '@/lib/data/dailyWisdom';
+import { getWisdomHistory, recordWisdomInteraction } from '@/lib/wisdomStore';
 
 // The data-loss guard depends only on the decrypt state + existence of an
 // entry, so we mock the data hooks and assert the rendered guard directly.
@@ -42,6 +44,7 @@ vi.mock('@/hooks/useNip44Support', () => ({
 }));
 vi.mock('@/hooks/useNostrPublish', () => ({
   useNostrPublish: () => ({ mutate: publish, isPending: false }),
+  SignerTimeoutError: class SignerTimeoutError extends Error {},
 }));
 const updateAppSettings = vi.fn();
 vi.mock('@/hooks/useAppSettings', () => ({
@@ -103,6 +106,88 @@ const encryptedEntry: NostrEvent = {
     ['encrypted', 'nip44'],
   ],
 };
+
+describe('DayDetailDialog — wisdom context', () => {
+  const wisdom = DAILY_WISDOM[0];
+  const wisdomDay = { ...TODAY, dayOfYear: 255, date: new Date(2026, 8, 12), dateString: '2026-09-12' };
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    publish.mockReset();
+    mockUser.mockReturnValue({ user: { pubkey: 'pk-self', method: 'extension', signer: {} } });
+    mockNip44.mockReturnValue({ supported: false });
+    mockExistingEntry.mockReturnValue({ data: null });
+    mockDecrypted.mockReturnValue({ content: '', isEncrypted: false, isDecrypting: false, decryptError: null });
+    recordWisdomInteraction('pk-self', wisdom, wisdomDay.dateString, 'added');
+  });
+
+  it('shows optional context without writing it into the editor and links only after save success', async () => {
+    render(<DayDetailDialog day={wisdomDay} open onOpenChange={() => {}} focusWisdom />);
+    expect(screen.getByText(wisdom.prompt!)).toBeVisible();
+    expect(screen.getByTestId('editor')).toHaveValue('');
+    fireEvent.change(screen.getByTestId('editor'), { target: { value: 'I took time to listen.' } });
+    fireEvent.click(screen.getByRole('button', { name: /save entry/i }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    const [event, callbacks] = publish.mock.calls[0];
+    expect(event.content).toBe('I took time to listen.');
+    expect(event.tags.some(([name]: string[]) => name === 'wisdom')).toBe(false);
+    expect(getWisdomHistory('pk-self')[0].reflection).toBeUndefined();
+    act(() => callbacks.onError(new Error('offline')));
+    expect(getWisdomHistory('pk-self')[0].reflection).toBeUndefined();
+    expect(screen.getByTestId('editor')).toHaveValue('I took time to listen.');
+    fireEvent.click(screen.getByRole('button', { name: /save entry/i }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(2));
+    act(() => publish.mock.calls[1][1].onSuccess({ ...event, id: 'saved', pubkey: 'pk-self', created_at: 100 }));
+    expect(getWisdomHistory('pk-self')[0].reflection?.eventId).toBe('saved');
+    expect(localStorage.getItem('gratefulday:wisdom:v1:pk-self')).not.toContain('I took time to listen.');
+  });
+
+  it('preserves old writing, adds an empty moment, and keeps context optional', () => {
+    mockExistingEntry.mockReturnValue({ data: { ...encryptedEntry, id: 'legacy', tags: [['d', wisdomDay.dateString]] } });
+    mockDecrypted.mockReturnValue({ content: 'An existing moment', isEncrypted: false, isDecrypting: false, decryptError: null });
+    render(<DayDetailDialog day={wisdomDay} open onOpenChange={() => {}} focusWisdom />);
+    expect(screen.getByText('An existing moment')).toBeVisible();
+    expect(screen.getByTestId('editor')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: /remove wisdom context/i }));
+    expect(screen.queryByText(wisdom.prompt!)).not.toBeInTheDocument();
+    expect(screen.getByText('An existing moment')).toBeVisible();
+    expect(getWisdomHistory('pk-self')[0].active).toBe(false);
+  });
+
+  it('keeps a guest draft and its chosen wisdom when signing in, even if an existing entry arrives later', () => {
+    mockUser.mockReturnValue({ user: undefined });
+    recordWisdomInteraction(undefined, wisdom, wisdomDay.dateString, 'added');
+    const view = render(<DayDetailDialog day={wisdomDay} open onOpenChange={() => {}} focusWisdom />);
+    fireEvent.change(screen.getByTestId('editor'), { target: { value: 'My draft before login' } });
+    mockUser.mockReturnValue({ user: { pubkey: 'new-account', method: 'extension', signer: {} } });
+    view.rerender(<DayDetailDialog day={wisdomDay} open onOpenChange={() => {}} focusWisdom />);
+    expect(screen.getByTestId('editor')).toHaveValue('My draft before login');
+    expect(getWisdomHistory('new-account')[0].active).toBe(true);
+    mockExistingEntry.mockReturnValue({ data: { ...encryptedEntry, id: 'arrived-later', pubkey: 'new-account', tags: [['d', wisdomDay.dateString]] } });
+    mockDecrypted.mockReturnValue({ content: 'Already saved earlier', isEncrypted: false, isDecrypting: false, decryptError: null });
+    view.rerender(<DayDetailDialog day={wisdomDay} open onOpenChange={() => {}} focusWisdom />);
+    expect(screen.getByText('Already saved earlier')).toBeVisible();
+    expect(screen.getByTestId('editor')).toHaveValue('My draft before login');
+  });
+
+  it('does not leak wisdom or private writing into Nostr tags or local history', async () => {
+    const encrypt = vi.fn().mockResolvedValue('CIPHERTEXT');
+    mockUser.mockReturnValue({ user: { pubkey: 'pk-self', method: 'extension', signer: { nip44: { encrypt } } } });
+    mockNip44.mockReturnValue({ supported: true });
+    render(<DayDetailDialog day={wisdomDay} open onOpenChange={() => {}} />);
+    fireEvent.change(screen.getByTestId('editor'), { target: { value: 'My private response' } });
+    fireEvent.click(screen.getByRole('button', { name: /save entry/i }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    expect(encrypt).toHaveBeenCalledWith('pk-self', 'My private response');
+    const [event, callbacks] = publish.mock.calls[0];
+    expect(event.content).toBe('CIPHERTEXT');
+    expect(event.tags).toContainEqual(['encrypted', 'nip44']);
+    expect(JSON.stringify(event.tags)).not.toMatch(/patience|gracian|My private response/);
+    act(() => callbacks.onSuccess({ ...event, id: 'private-saved', pubkey: 'pk-self', created_at: 100 }));
+    expect(getWisdomHistory('pk-self')[0].reflection?.eventId).toBe('private-saved');
+    expect(localStorage.getItem('gratefulday:wisdom:v1:pk-self')).not.toContain('My private response');
+  });
+});
 
 describe('DayDetailDialog — decrypt-failure data-loss guard', () => {
   beforeEach(() => {

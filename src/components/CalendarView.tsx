@@ -7,6 +7,7 @@ import { PastDaysList } from './PastDaysList';
 import { DayDetailDialog } from './DayDetailDialog';
 import type { DayInfo } from '@/lib/gratitudeUtils';
 import { getTotalDaysInYear } from '@/lib/gratitudeUtils';
+import { useCurrentUser } from '@/hooks/useCurrentUser';
 
 interface CalendarViewProps {
   days: DayInfo[];
@@ -14,8 +15,21 @@ interface CalendarViewProps {
 }
 
 export function CalendarView({ days, entriesByDate }: CalendarViewProps) {
+  const { user } = useCurrentUser();
+  const pubkey = user?.pubkey;
+  const [scope, setScope] = useState({ pubkey, revision: 0 });
+  if (scope.pubkey !== pubkey) {
+    // Signing in continues the guest draft. Leaving a signed-in account must
+    // discard its mounted editor so another account cannot inherit its text.
+    setScope({ pubkey, revision: scope.revision + (scope.pubkey ? 1 : 0) });
+  }
+  return <CalendarContent key={scope.revision} days={days} entriesByDate={entriesByDate} />;
+}
+
+function CalendarContent({ days, entriesByDate }: CalendarViewProps) {
   const [selectedDay, setSelectedDay] = useState<DayInfo | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [focusWisdom, setFocusWisdom] = useState(false);
 
   // Find today
   const today = days.find((day) => day.isToday);
@@ -27,6 +41,7 @@ export function CalendarView({ days, entriesByDate }: CalendarViewProps) {
   }, []);
 
   const handleOpenDetail = (day: DayInfo) => {
+    setFocusWisdom(false);
     setSelectedDay(day);
     setDialogOpen(true);
   };
@@ -50,6 +65,11 @@ export function CalendarView({ days, entriesByDate }: CalendarViewProps) {
           day={today}
           onOpenDetail={handleOpenDetail}
           totalDays={totalDays}
+          onAddWisdom={() => {
+            setSelectedDay(today);
+            setFocusWisdom(true);
+            setDialogOpen(true);
+          }}
         />
 
         {/* Streak strip - hidden when logged out or no entries yet */}
@@ -77,6 +97,7 @@ export function CalendarView({ days, entriesByDate }: CalendarViewProps) {
         day={selectedDay}
         open={dialogOpen}
         onOpenChange={handleCloseDialog}
+        focusWisdom={focusWisdom}
       />
     </>
   );

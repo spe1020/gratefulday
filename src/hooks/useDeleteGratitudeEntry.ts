@@ -3,6 +3,7 @@ import { useNostr } from '@nostrify/react';
 import type { NostrEvent } from '@nostrify/nostrify';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { addEntryTombstone, entryAddress } from '@/lib/entryTombstones';
+import { unlinkWisdomReflections } from '@/lib/wisdomStore';
 
 /**
  * Request deletion of a gratitude entry via NIP-09 (kind 5).
@@ -49,6 +50,7 @@ export function useDeleteGratitudeEntry() {
       if (!user) return;
 
       addEntryTombstone(user.pubkey, dateString, deletion.created_at);
+      unlinkWisdomReflections(user.pubkey, dateString);
 
       // Evict from both caches directly — invalidating would refetch from
       // relays that may not have processed the deletion request yet.
