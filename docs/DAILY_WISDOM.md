@@ -62,11 +62,13 @@ Each record contains:
 - `active`: whether this context is still attached to the day.
 - Optional `reflection`: a NIP-01 address, saved event ID, and `linkedAt` timestamp.
 
-A reflection link is created only after a successful entry save with a nonempty
-draft. An already linked entry's event ID is updated on later successful saves.
+A reflection link is created only after a successful, nonempty entry save whose
+normalized text differs from the last loaded or successfully saved content.
+An already linked entry's event ID is updated on later successful saves.
 Opening, adding, saving an unchanged old entry, cancelling, or failed publishing
 does not create a link. Removing context or successfully deleting the associated
 entry removes its link while retaining the deliberate interaction in the journey.
+Context can also be removed from past days without editing the saved entry.
 Historical dates are independent: revisiting the same principle on another day
 creates another record, not an engagement count.
 
@@ -82,7 +84,9 @@ encrypted at rest, so someone with access to the browser's storage can see the
 wisdom interaction metadata, but not private reflection text. Clearing site data
 removes this history; logging into another device does not restore it. Guests
 have memory-only history. Signing in with an open guest draft preserves that
-draft and adopts only its deliberately selected wisdom, not all guest history.
+draft, including an empty editor, and adopts only its deliberately selected
+wisdom, not all guest history. Save and Share wait for the day's entry query to
+settle so a late relay response cannot overwrite a just-saved guest draft.
 Switching away from a signed-in account resets the mounted editor and history.
 
 ## Nostr review and future foundation
