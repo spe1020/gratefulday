@@ -1,6 +1,8 @@
 import { useNostr } from '@nostrify/react';
 import { NLogin, useNostrLogin } from '@nostrify/react/login';
 
+import type { NLoginType } from '@nostrify/react/login';
+
 // NOTE: This file should not be edited except for adding new login methods.
 
 export function useLoginActions() {
@@ -16,6 +18,11 @@ export function useLoginActions() {
     // Login with a NIP-46 "bunker://" URI
     async bunker(uri: string): Promise<void> {
       const login = await NLogin.fromBunker(uri, nostr);
+      addLogin(login);
+    },
+    // Login with an already-established NIP-46 session (e.g. Amber via
+    // a nostrconnect:// handshake — see src/lib/nostrConnect.ts)
+    remote(login: NLoginType): void {
       addLogin(login);
     },
     // Login with a NIP-07 browser extension
