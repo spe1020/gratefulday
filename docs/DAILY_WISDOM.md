@@ -20,11 +20,22 @@ missing provenance is explicitly unverified, and missing questions use a neutral
 Grateful Day prompt. Adaptations are labelled and are not presented as verbatim
 quotations. Interpretations are labelled “A reading by Grateful Day.”
 
-The six-item V1 collection starts on **2026-09-12**. Selection is deterministic
-by local calendar day, using UTC-normalized dates to avoid DST drift. Dates
-before that retain the previous `getQuoteForDay` result. The legacy quote data
-and API, daily affirmations, entry format, and sharing controls remain compatible.
-The intentionally small new collection repeats every six days.
+The six-item V1 collection starts on **2026-09-12** and stays in effect through
+**2026-09-21**. Selection is deterministic by local calendar day, using
+UTC-normalized dates to avoid DST drift. Dates before 2026-09-12 retain the
+previous `getQuoteForDay` result. The legacy quote data and API, daily
+affirmations, entry format, and sharing controls remain compatible.
+
+From **2026-09-22**, the daily passage comes from a rotation long enough that a
+year does not repeat one. It keeps the 400 public-domain readings from Marcus
+Aurelius (George Long), Epictetus (Thomas Wentworth Higginson), the Dhammapada
+(F. Max Müller), and the Tao Te Ching (James Legge), and weaves in civic wisdom
+from Benjamin Franklin, Abraham Lincoln, George Washington, and Thomas
+Jefferson. Those passages are their own words, including political counsel
+about debt, parties, disagreement, and the uses of power. One of them follows
+every third item from the longer collection, so September 22 is unchanged and
+September 25 is the first of the civic set. Each item keeps its own Grateful
+Day reading and question. V1 wording and order are unchanged.
 
 To grow the collection, add items with new stable IDs and append an effective-
 dated schedule in `wisdom.ts`; keep previous schedules and their item order

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { DAILY_WISDOM } from './data/dailyWisdom';
+import { DAILY_WISDOM_EXPANDED } from './data/dailyWisdomExpanded';
+import { DAILY_WISDOM_STATESMEN } from './data/dailyWisdomStatesmen';
 import { formatDateString, getDayOfYear, getQuoteForDay } from './gratitudeUtils';
 
 export const wisdomItemSchema = z.object({
@@ -24,7 +26,32 @@ export type WisdomItem = z.infer<typeof wisdomItemSchema>;
 // Keep the old calendar intact. Future collections should add a dated schedule
 // version rather than changing the length/order of this first rotation.
 export const WISDOM_START_DATE = '2026-09-12';
-const schedules = [{ from: WISDOM_START_DATE, items: DAILY_WISDOM }] as const;
+export const WISDOM_EXPANDED_START_DATE = '2026-09-22';
+
+function weaveWisdom(base: readonly WisdomItem[], extra: readonly WisdomItem[], interval: number): WisdomItem[] {
+  const rotation: WisdomItem[] = [];
+  let extraIndex = 0;
+  base.forEach((item, index) => {
+    rotation.push(item);
+    if ((index + 1) % interval === 0 && extraIndex < extra.length) {
+      rotation.push(extra[extraIndex]);
+      extraIndex += 1;
+    }
+  });
+  while (extraIndex < extra.length) {
+    rotation.push(extra[extraIndex]);
+    extraIndex += 1;
+  }
+  return rotation;
+}
+
+// Civic passages are woven through the longer rotation. September 22 still
+// opens on the first expanded item; a statesman follows every third of those.
+export const WISDOM_ROTATION = weaveWisdom(DAILY_WISDOM_EXPANDED, DAILY_WISDOM_STATESMEN, 3);
+const schedules = [
+  { from: WISDOM_START_DATE, items: DAILY_WISDOM },
+  { from: WISDOM_EXPANDED_START_DATE, items: WISDOM_ROTATION },
+] as const;
 
 export function getWisdomForDate(date: Date): WisdomItem | undefined {
   const dateString = formatDateString(date);
