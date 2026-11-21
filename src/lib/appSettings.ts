@@ -132,26 +132,33 @@ export function serializeSettings(settings: AppSettings): string {
   });
 }
 
-/** Tolerant parse — unknown shape degrades to empty rather than throwing. */
-export function parseSettings(json: string): AppSettings {
+/**
+ * Parse decrypted settings content. Returns null when the content is not a
+ * JSON object (invalid JSON, `null`, a primitive or an array): that is
+ * "unreadable", never "empty", because writing over it would replace whatever
+ * the event holds. Inside a JSON object, fields of the wrong type are dropped
+ * individually (tolerant, forward-compatible with unknown fields).
+ */
+export function parseSettings(json: string): AppSettings | null {
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(json);
-    if (!parsed || typeof parsed !== 'object') return emptySettings();
-    const privacyDefault =
-      typeof parsed.privacyDefault === 'boolean' ? parsed.privacyDefault : undefined;
-    const celebratedMilestones = Array.isArray(parsed.celebratedMilestones)
-      ? parsed.celebratedMilestones.filter((m: unknown): m is number => typeof m === 'number')
-      : [];
-    const lastSeenNotifications =
-      typeof parsed.lastSeenNotifications === 'number' ? parsed.lastSeenNotifications : undefined;
-    return {
-      privacyDefault,
-      celebratedMilestones: unionSorted(celebratedMilestones, []),
-      lastSeenNotifications,
-    };
+    parsed = JSON.parse(json);
   } catch {
-    return emptySettings();
+    return null;
   }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const obj = parsed as Record<string, unknown>;
+  const privacyDefault = typeof obj.privacyDefault === 'boolean' ? obj.privacyDefault : undefined;
+  const celebratedMilestones = Array.isArray(obj.celebratedMilestones)
+    ? obj.celebratedMilestones.filter((m: unknown): m is number => typeof m === 'number')
+    : [];
+  const lastSeenNotifications =
+    typeof obj.lastSeenNotifications === 'number' ? obj.lastSeenNotifications : undefined;
+  return {
+    privacyDefault,
+    celebratedMilestones: unionSorted(celebratedMilestones, []),
+    lastSeenNotifications,
+  };
 }
 
 /** The newest (highest `created_at`) event, or null. */
@@ -182,12 +189,15 @@ export async function decryptSettings(
   pubkey: string,
   event: NostrEvent
 ): Promise<AppSettings | null> {
+  let json: string;
   try {
-    const json = await decryptEntryContent(signer, pubkey, event.content);
-    return parseSettings(json);
+    json = await decryptEntryContent(signer, pubkey, event.content);
   } catch {
     return null;
   }
+  // Decrypted but not a settings object: also null, so `resolveRemoteSettings`
+  // reports it as unreadable instead of as empty settings.
+  return parseSettings(json);
 }
 
 /**
@@ -197,7 +207,7 @@ export async function decryptSettings(
  */
 export class SettingsUnreadableError extends Error {
   constructor() {
-    super('Remote settings could not be decrypted');
+    super('Remote settings could not be decrypted or parsed');
     this.name = 'SettingsUnreadableError';
   }
 }
@@ -205,7 +215,8 @@ export class SettingsUnreadableError extends Error {
 /**
  * Resolve fetched settings events to the remote state: `null` only when no
  * event exists. Throws `SettingsUnreadableError` when the newest event can't
- * be decrypted, so callers can't mistake it for an empty remote.
+ * be decrypted, or decrypts to content that isn't a settings object, so
+ * callers can't mistake it for an empty remote.
  */
 export async function resolveRemoteSettings(
   signer: NostrSigner,
