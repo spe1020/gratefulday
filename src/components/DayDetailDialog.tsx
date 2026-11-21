@@ -569,7 +569,7 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
    */
   const confirmBaseUnchanged = async (): Promise<boolean> => {
     if (!user || !day) return false;
-    const kept = 'Nothing was saved — your notes are still here.';
+    const kept = 'Nothing was saved. Your notes are still here.';
     setIsCheckingBase(true);
     try {
       const result = await checkEntryBase(user.pubkey, day.dateString, baseRef.current);
@@ -586,14 +586,14 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
       });
       toast({
         title: 'This day changed on another device',
-        description: `${kept} Copy anything you want to keep, then close and reopen this day to see the latest version before saving.`,
+        description: `${kept} To see the latest version, copy anything you want to keep, then close and reopen this day.`,
         variant: 'destructive',
       });
       return false;
     } catch {
       toast({
-        title: "Couldn't check for changes",
-        description: `${kept} Your relays didn't answer in time, so this save could have replaced newer writing. Check your connection and try again.`,
+        title: "Couldn't save right now",
+        description: `${kept} Not enough of your relays answered to be sure this wouldn't replace newer writing. Check your connection and try again.`,
         variant: 'destructive',
       });
       return false;

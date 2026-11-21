@@ -829,7 +829,7 @@ describe('DayDetailDialog — base-version check before save', () => {
     await editAndClick(/save entry/i);
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'destructive', title: expect.stringMatching(/couldn't check/i) })
+        expect.objectContaining({ variant: 'destructive', title: expect.stringMatching(/couldn't save right now/i) })
       )
     );
     expect(publish).not.toHaveBeenCalled();
