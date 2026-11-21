@@ -8,6 +8,10 @@ import { generateSecretKey, getPublicKey } from 'nostr-tools';
 import { NSecSigner } from '@nostrify/nostrify';
 import type { NostrEvent } from '@nostrify/nostrify';
 import {
+  clearPendingPrivacy,
+  readPendingPrivacy,
+  setPendingPrivacy,
+  withPendingPrivacy,
   SettingsUnreadableError,
   applySettingsPatch,
   mergeForWrite,
@@ -299,5 +303,28 @@ describe('resolveRemoteSettings', () => {
     await expect(resolveRemoteSettings(signer, pubkey, [readable, corrupt])).rejects.toBeInstanceOf(
       SettingsUnreadableError
     );
+  });
+});
+
+describe('pending privacy marker', () => {
+  it('clears only when it still holds the published value', () => {
+    setPendingPrivacy('pk', true);
+    // A newer choice (false) was made before the publish of `true` succeeded.
+    setPendingPrivacy('pk', false);
+    clearPendingPrivacy('pk', true);
+    expect(readPendingPrivacy('pk')).toBe(false);
+    clearPendingPrivacy('pk', false);
+    expect(readPendingPrivacy('pk')).toBeUndefined();
+  });
+
+  it('is per pubkey', () => {
+    setPendingPrivacy('pk-a', true);
+    expect(readPendingPrivacy('pk-b')).toBeUndefined();
+  });
+
+  it('withPendingPrivacy overlays only when pending', () => {
+    const s = { privacyDefault: false, celebratedMilestones: [7] };
+    expect(withPendingPrivacy(s, undefined)).toBe(s);
+    expect(withPendingPrivacy(s, true)).toEqual({ ...s, privacyDefault: true });
   });
 });

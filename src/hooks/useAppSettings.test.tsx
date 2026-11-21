@@ -207,7 +207,7 @@ describe('useAppSettings — a blocked privacy-default change is kept (Audit M1)
   });
 
   it('a refetch of the older remote value does not flip it back', async () => {
-    const { result } = await blockedPrivateChoice();
+    const { result, rerender } = await blockedPrivateChoice();
     expect(readPendingPrivacy('pk-self')).toBe(true);
     // Relays answer again, still holding the older Public value.
     queryForWrite.mockResolvedValue([]);
@@ -216,6 +216,9 @@ describe('useAppSettings — a blocked privacy-default change is kept (Audit M1)
       await client.refetchQueries({ queryKey: ['app-settings', 'pk-self'] });
     });
     expect(client.getQueryData(['app-settings', 'pk-self'])).toMatchObject({ privacyDefault: false });
+    // Re-render so the hook recomputes from the refetched cache before asserting.
+    rerender();
+    await flush();
     expect(result.current.settings.privacyDefault).toBe(true);
   });
 
