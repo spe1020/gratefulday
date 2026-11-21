@@ -198,7 +198,7 @@ describe('useAppSettings — a blocked privacy-default change is kept (Audit M1)
   it('tells the user once that the choice has not synced', async () => {
     const { result } = await blockedPrivateChoice();
     expect(toast).toHaveBeenCalledTimes(1);
-    expect(toast.mock.calls[0][0]).toMatchObject({ title: expect.stringMatching(/privacy choice saved on this device/i) });
+    expect(toast.mock.calls[0][0]).toMatchObject({ title: expect.stringMatching(/privacy default saved on this device/i) });
     expect(toast.mock.calls[0][0].variant).toBeUndefined();
     // Another blocked write (e.g. the next entry save re-sending it) doesn't repeat it.
     act(() => result.current.updateSettings({ privacyDefault: true }));

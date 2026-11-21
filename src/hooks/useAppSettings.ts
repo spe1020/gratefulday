@@ -149,9 +149,9 @@ export function useAppSettings(): UseAppSettingsResult {
       if (value === undefined || notifiedPendingRef.current === value) return;
       notifiedPendingRef.current = value;
       toast({
-        title: 'Privacy choice saved on this device',
+        title: 'Privacy default saved on this device',
         description:
-          "It hasn't synced to your other devices yet. It will sync the next time you save an entry.",
+          'This entry keeps the setting you chose. Your other devices will get the new default after your next save goes through.',
       });
     },
     [toast]
