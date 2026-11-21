@@ -36,6 +36,7 @@ import {
   writeLocalCache,
 } from './appSettings';
 import { pickCelebration } from './streakUtils';
+import { encryptEntryContent } from './privacyUtils';
 
 // In-memory localStorage for the cache tests (node has none).
 const store = new Map<string, string>();
@@ -72,22 +73,30 @@ describe('serialize / parse', () => {
   it('stamps a version and sorts/dedupes milestones', () => {
     const json = serializeSettings({ celebratedMilestones: [30, 7, 7] });
     expect(JSON.parse(json).version).toBe(1);
-    expect(parseSettings(json).celebratedMilestones).toEqual([7, 30]);
+    expect(parseSettings(json)?.celebratedMilestones).toEqual([7, 30]);
   });
 
   it('round-trips lastSeenNotifications', () => {
     const s = { celebratedMilestones: [], lastSeenNotifications: 1_700_000_000 };
-    expect(parseSettings(serializeSettings(s)).lastSeenNotifications).toBe(1_700_000_000);
+    expect(parseSettings(serializeSettings(s))?.lastSeenNotifications).toBe(1_700_000_000);
     // a non-number is dropped
-    expect(parseSettings('{"celebratedMilestones":[],"lastSeenNotifications":"x"}').lastSeenNotifications).toBeUndefined();
+    expect(parseSettings('{"celebratedMilestones":[],"lastSeenNotifications":"x"}')?.lastSeenNotifications).toBeUndefined();
   });
 
-  it('degrades a corrupt or alien payload to empty', () => {
-    expect(parseSettings('not json')).toEqual(emptySettings());
-    expect(parseSettings('null')).toEqual(emptySettings());
+  it('returns null (unreadable, not empty) when the content is not a JSON object', () => {
+    for (const content of ['not json', '', 'null', '42', '"text"', 'true', '[]', '[7, 30]']) {
+      expect(parseSettings(content), content).toBeNull();
+    }
+  });
+
+  it('drops wrongly-typed fields inside a JSON object, one by one', () => {
     expect(parseSettings('{"celebratedMilestones":"nope","privacyDefault":3}')).toEqual(
       emptySettings()
     );
+    expect(parseSettings('{"privacyDefault":true,"celebratedMilestones":"nope"}')).toEqual({
+      privacyDefault: true,
+      celebratedMilestones: [],
+    });
   });
 });
 
@@ -298,6 +307,26 @@ describe('resolveRemoteSettings', () => {
     const result = await resolveRemoteSettings(signer, pubkey, [older, newer]);
     expect(result?.celebratedMilestones).toEqual([30]);
   });
+
+  it.each([
+    ['invalid JSON', 'not json'],
+    ['JSON null', 'null'],
+    ['a JSON primitive', '42'],
+    ['a JSON array', '[7, 30]'],
+  ])(
+    'throws SettingsUnreadableError when the newest event decrypts to %s (never "empty settings")',
+    async (_label, plaintext) => {
+      const sk = generateSecretKey();
+      const pubkey = getPublicKey(sk);
+      const signer = new NSecSigner(sk);
+      const readable = settingsEvent(await encryptSettings(signer, pubkey, { celebratedMilestones: [7] }), 1);
+      const malformed = settingsEvent(await encryptEntryContent(signer, pubkey, plaintext), 2);
+      expect(await decryptSettings(signer, pubkey, malformed)).toBeNull();
+      await expect(resolveRemoteSettings(signer, pubkey, [readable, malformed])).rejects.toBeInstanceOf(
+        SettingsUnreadableError
+      );
+    }
+  );
 
   it('throws SettingsUnreadableError when the newest event cannot be decrypted (never "no settings")', async () => {
     const sk = generateSecretKey();
