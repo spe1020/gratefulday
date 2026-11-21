@@ -9,6 +9,7 @@ import { NSecSigner } from '@nostrify/nostrify';
 import type { NostrEvent } from '@nostrify/nostrify';
 import {
   clearPendingPrivacy,
+  effectivePrivacyDefault,
   nextSettingsCreatedAt,
   noteKnownSettingsAt,
   readKnownSettingsAt,
@@ -387,11 +388,20 @@ describe('resolveAgainstKnown — relay copies older than what this device knows
     expect(readKnownSettingsAt(PK)).toBe(300);
   });
 
-  it('treats an event at exactly the known time as current (our own publish)', () => {
+  it('at exactly the known time the local privacy default stands (same-second tie from elsewhere)', () => {
     writeLocalCache(PK, { privacyDefault: true, celebratedMilestones: [] });
     noteKnownSettingsAt(PK, 200);
-    const out = resolveAgainstKnown(PK, { privacyDefault: true, celebratedMilestones: [7] }, 200);
+    const out = resolveAgainstKnown(PK, { privacyDefault: false, celebratedMilestones: [7] }, 200);
     expect(out).toEqual({ privacyDefault: true, celebratedMilestones: [7] });
+    expect(readLocalCache(PK).privacyDefault).toBe(true);
+  });
+
+  it('effectivePrivacyDefault: pending, then local, then (only if nothing local) remote', () => {
+    const local = (privacyDefault?: boolean) => ({ privacyDefault, celebratedMilestones: [] });
+    expect(effectivePrivacyDefault(local(true), local(false), undefined)).toBe(true);
+    expect(effectivePrivacyDefault(local(true), local(true), false)).toBe(false);
+    expect(effectivePrivacyDefault(local(undefined), local(false), undefined)).toBe(false);
+    expect(effectivePrivacyDefault(local(undefined), null, undefined)).toBeUndefined();
   });
 
   it('never moves the known time backwards, and keeps accounts separate', () => {

@@ -363,9 +363,10 @@ export function noteKnownSettingsAt(pubkey: string, createdAt: number): void {
 /**
  * Turn what a relay read returned into the remote state to reconcile with.
  *
- * - Older than what this device already knows: a stale copy. Keep its
- *   monotonic fields (they only ever add), but `privacyDefault` comes from
- *   the local cache, which reflects the newer event.
+ * - Not newer than what this device already knows (a stale copy, or the very
+ *   event it last published/applied): keep its monotonic fields (they only
+ *   ever add), but `privacyDefault` comes from the local cache, which already
+ *   reflects that newest event.
  * - Newer: apply it. Remember its timestamp and, unless an unsynced local
  *   choice is pending, store its `privacyDefault` locally so a later stale
  *   read can't undo it.
@@ -378,7 +379,7 @@ export function resolveAgainstKnown(
   if (!fetched) return null;
   const at = fetchedCreatedAt ?? 0;
   const known = readKnownSettingsAt(pubkey);
-  if (at < known) {
+  if (at <= known) {
     const localPrivacy = readLocalCache(pubkey).privacyDefault;
     return { ...fetched, privacyDefault: localPrivacy ?? fetched.privacyDefault };
   }
@@ -397,7 +398,27 @@ export function resolveAgainstKnown(
  * `created_at` for the next settings event: now, but always after the newest
  * event this device knows of. Two writes in the same second would otherwise
  * tie, and relays keep only one of a tie.
+ *
+ * Deliberately not capped at "now": if the newest known event is future-dated
+ * (another device's clock is wrong), an event stamped "now" would be accepted
+ * and then ignored, because relays keep the future-dated one. Stamping just
+ * after it is the only way this device's change can take effect.
  */
 export function nextSettingsCreatedAt(pubkey: string, nowSeconds = Math.floor(Date.now() / 1000)): number {
   return Math.max(nowSeconds, readKnownSettingsAt(pubkey) + 1);
+}
+
+/**
+ * The privacy default to show and to build on, in priority order: an unsynced
+ * local choice; the local cache (every newer relay event is written into it by
+ * `resolveAgainstKnown`, and every tab shares it); and only for a device with
+ * nothing stored yet, whatever the fetched copy says. Cached query data never
+ * outranks the local cache: it can predate a change made in another tab.
+ */
+export function effectivePrivacyDefault(
+  local: AppSettings,
+  remote: AppSettings | null,
+  pending: boolean | undefined
+): boolean | undefined {
+  return pending ?? local.privacyDefault ?? remote?.privacyDefault;
 }

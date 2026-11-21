@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -280,7 +280,6 @@ describe('useAppSettings — a blocked privacy-default change is kept (Audit M1)
     await act(async () => {
       await client.refetchQueries({ queryKey: ['app-settings', 'pk-self'] });
     });
-    expect(client.getQueryData(['app-settings', 'pk-self'])).toMatchObject({ privacyDefault: false });
     // Re-render so the hook recomputes from the refetched cache before asserting.
     rerender();
     await flush();
@@ -698,5 +697,110 @@ describe('useAppSettings — components share one view of local settings', () =>
       expect(s.privacyDefault).toBeUndefined();
       expect(s.celebratedMilestones).toEqual([]);
     }
+  });
+});
+
+describe('useAppSettings — a change made in another tab', () => {
+  beforeEach(() => decryptFromEvents());
+
+  it('shows the new privacy default at once, and the next save does not publish the old one', async () => {
+    const AT_100 = remoteEvent(100, { privacyDefault: false, celebratedMilestones: [] });
+    queryForDisplay.mockResolvedValue([AT_100]);
+    const { result } = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(result.current.settings.privacyDefault).toBe(false));
+
+    // Another tab: the user picks Private and it publishes at 200. That tab
+    // writes the shared localStorage; this tab only gets the storage event,
+    // and its cached query data still says Public.
+    const AT_200 = remoteEvent(200, { privacyDefault: true, celebratedMilestones: [] });
+    writeLocalCache('pk-self', { privacyDefault: true, celebratedMilestones: [] });
+    noteKnownSettingsAt('pk-self', 200);
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: 'gratefulday:privacy-default:v1' }));
+    });
+    expect(result.current.settings.privacyDefault).toBe(true);
+
+    // An entry save re-sends what the editor showed.
+    queryForWrite.mockResolvedValue([AT_100, AT_200]);
+    act(() => result.current.updateSettings({ privacyDefault: result.current.settings.privacyDefault }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    expect(encryptSettings.mock.calls.at(-1)![2].privacyDefault).toBe(true);
+    expect(readLocalCache('pk-self').privacyDefault).toBe(true);
+  });
+
+  it("shows another tab's milestones and read-state too", async () => {
+    const { result } = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    writeLocalCache('pk-self', { celebratedMilestones: [7], lastSeenNotifications: 700 });
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: 'gratefulday:milestones:v1' }));
+    });
+    expect(result.current.settings).toMatchObject({ celebratedMilestones: [7], lastSeenNotifications: 700 });
+  });
+});
+
+describe('useAppSettings — a newer event found by a read is applied everywhere', () => {
+  beforeEach(() => decryptFromEvents());
+
+  it('a display read in one component updates what every component shows and stores', async () => {
+    writeLocalCache('pk-self', { privacyDefault: true, celebratedMilestones: [] });
+    noteKnownSettingsAt('pk-self', 200);
+    const a = renderHook(() => useAppSettings(), { wrapper });
+    const b = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(b.result.current.isLoading).toBe(false));
+    expect(b.result.current.settings.privacyDefault).toBe(true);
+    // Another device chose Public at 300; a refetch sees it.
+    queryForDisplay.mockResolvedValue([remoteEvent(300, { privacyDefault: false, celebratedMilestones: [] })]);
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ['app-settings', 'pk-self'] });
+    });
+    expect(a.result.current.settings.privacyDefault).toBe(false);
+    expect(b.result.current.settings.privacyDefault).toBe(false);
+    expect(readLocalCache('pk-self').privacyDefault).toBe(false);
+  });
+});
+
+describe('useAppSettings — seeding', () => {
+  it('does not seed when this device already knows a settings event exists', async () => {
+    writeLocalCache('pk-self', { privacyDefault: true, celebratedMilestones: [7] });
+    noteKnownSettingsAt('pk-self', 200);
+    // Relays show nothing (lag or loss): not a first run.
+    renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(queryForDisplay).toHaveBeenCalled());
+    await flush();
+    expect(queryForWrite).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+  });
+});
+
+describe('useAppSettings — a signer that never answers the decrypt', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('times out as a blocked write and does not hold up later writes', async () => {
+    const { result } = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    queryForWrite.mockResolvedValue([{ id: 'x', created_at: 5 } as NostrEvent]);
+
+    vi.useFakeTimers();
+    // First write: the bunker never answers the decrypt of the strict read.
+    resolveRemoteSettings.mockImplementationOnce(() => new Promise<never>(() => {}));
+    act(() => result.current.updateSettings({ privacyDefault: true }));
+    act(() => result.current.updateSettings({ celebratedMilestones: [7] }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(publish).not.toHaveBeenCalled();
+    expect(queryForWrite).toHaveBeenCalledTimes(1); // the second write is queued behind it
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    vi.useRealTimers();
+    // The first write gave up without publishing; the second ran and carries both changes.
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    expect(encryptSettings.mock.calls.at(-1)![2]).toMatchObject({
+      privacyDefault: true,
+      celebratedMilestones: [7],
+    });
   });
 });

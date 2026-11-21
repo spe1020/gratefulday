@@ -26,6 +26,7 @@ import {
   applySettingsPatch,
   buildSettingsEvent,
   clearPendingPrivacy,
+  effectivePrivacyDefault,
   emptySettings,
   encryptSettings,
   mergeForWrite,
@@ -40,7 +41,6 @@ import {
   resolveAgainstKnown,
   resolveRemoteSettings,
   setPendingPrivacy,
-  withPendingPrivacy,
   writeLocalCache,
 } from '@/lib/appSettings';
 
@@ -63,7 +63,7 @@ const SETTINGS_READ_TIMEOUT_MS = 3000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Settings encryption timed out')), ms);
+    const timer = setTimeout(() => reject(new Error('Settings signer timed out')), ms);
     promise.then(
       (v) => {
         clearTimeout(timer);
@@ -142,7 +142,13 @@ export function useAppSettings(): UseAppSettingsResult {
     const events = await queryForWrite(nostr, readRelays, settingsFilter, {
       timeoutMs: SETTINGS_READ_TIMEOUT_MS,
     });
-    const fetched = await resolveRemoteSettings(user.signer, pubkey, events);
+    // Bounded like encrypt and sign: a bunker that never answers the decrypt
+    // must not hold the write queue (and its cross-tab lock) forever. A
+    // timeout is "unknown", so it blocks this write like any failed read.
+    const fetched = await withTimeout(
+      resolveRemoteSettings(user.signer, pubkey, events),
+      ENCRYPT_TIMEOUT_MS
+    );
     // A successful decrypt is the definitive bunker capability signal.
     if (fetched && user.method === 'bunker') cacheNip44Support(pubkey, true);
     return resolveAgainstKnown(pubkey, fetched, pickLatestEvent(events)?.created_at);
@@ -163,7 +169,10 @@ export function useAppSettings(): UseAppSettingsResult {
       });
       let fetched: AppSettings | null = null;
       try {
-        fetched = await resolveRemoteSettings(user.signer, pubkey, events);
+        fetched = await withTimeout(
+          resolveRemoteSettings(user.signer, pubkey, events),
+          ENCRYPT_TIMEOUT_MS
+        );
       } catch {
         fetched = null;
       }
@@ -187,14 +196,17 @@ export function useAppSettings(): UseAppSettingsResult {
   });
 
   const remote = remoteQuery.data ?? null;
-  // An unsynced local privacy choice wins over the (older) remote value until
-  // it has been published; see `setPendingPrivacy`.
-  const settings = useMemo(
-    () => withPendingPrivacy(reconcile(localCache, remote), pubkey ? readPendingPrivacy(pubkey) : undefined),
+  // Monotonic fields merge local with whatever was fetched. The privacy
+  // default comes from the local cache (see `effectivePrivacyDefault`), so a
+  // change made in another tab shows here at once and cached query data from
+  // before it can't bring the old value back.
+  const settings = useMemo(() => {
+    const merged = reconcile(localCache, remote);
+    const pending = pubkey ? readPendingPrivacy(pubkey) : undefined;
+    return { ...merged, privacyDefault: effectivePrivacyDefault(localCache, remote, pending) };
     // `localCache` changes identity whenever local storage (pending marker
-    // included) changes.
-    [localCache, remote, pubkey]
-  );
+    // included) changes, in this tab or another.
+  }, [localCache, remote, pubkey]);
 
   // A blocked write that carried an unsynced privacy choice is made visible
   // once per choice (not on every later blocked retry, and not once per
@@ -227,6 +239,7 @@ export function useAppSettings(): UseAppSettingsResult {
         // Read: never write against a remote we couldn't read. A timeout or a
         // decrypt failure throws here and skips the publish entirely.
         const remote = await fetchRemoteForWrite();
+        notifyLocalSettingsChanged(); // the read may have applied a newer event
         // The seed exists only to create a missing event; if one exists now,
         // let the query pick it up instead.
         if (seedOnly && remote) {
