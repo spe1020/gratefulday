@@ -6,6 +6,7 @@ import { useAppContext } from '@/hooks/useAppContext';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useNip44Support, cacheNip44Support } from '@/hooks/useNip44Support';
+import { useToast } from '@/hooks/useToast';
 import { Nip44UnsupportedError } from '@/lib/privacyUtils';
 import { queryForWrite, readRelayUrls } from '@/lib/relayQuery';
 import {
@@ -14,13 +15,17 @@ import {
   type AppSettings,
   applySettingsPatch,
   buildSettingsEvent,
+  clearPendingPrivacy,
   emptySettings,
   encryptSettings,
   mergeForWrite,
   needsSeed,
   readLocalCache,
+  readPendingPrivacy,
   reconcile,
   resolveRemoteSettings,
+  setPendingPrivacy,
+  withPendingPrivacy,
   writeLocalCache,
 } from '@/lib/appSettings';
 
@@ -76,6 +81,7 @@ export function useAppSettings(): UseAppSettingsResult {
   const { config } = useAppContext();
   const { supported } = useNip44Support();
   const { mutate: publish } = useNostrPublish();
+  const { toast } = useToast();
   const queryClient = useQueryClient();
 
   const pubkey = user?.pubkey;
@@ -124,11 +130,32 @@ export function useAppSettings(): UseAppSettingsResult {
   });
 
   const remote = remoteQuery.data ?? null;
-  const settings = useMemo(() => reconcile(localCache, remote), [localCache, remote]);
+  // An unsynced local privacy choice wins over the (older) remote value until
+  // it has been published; see `setPendingPrivacy`.
+  const settings = useMemo(
+    () => withPendingPrivacy(reconcile(localCache, remote), pubkey ? readPendingPrivacy(pubkey) : undefined),
+    [localCache, remote, pubkey]
+  );
 
   // Writes run one at a time, so a slower read for an earlier change can't
   // publish after (and so replace) a later one.
   const writeChainRef = useRef<Promise<void>>(Promise.resolve());
+
+  // A blocked write that carried an unsynced privacy choice is made visible
+  // once per choice (not on every later blocked retry).
+  const notifiedPendingRef = useRef<boolean | undefined>(undefined);
+  const notifyPrivacyUnsynced = useCallback(
+    (value: boolean | undefined) => {
+      if (value === undefined || notifiedPendingRef.current === value) return;
+      notifiedPendingRef.current = value;
+      toast({
+        title: 'Privacy choice saved on this device',
+        description:
+          "It hasn't synced to your other devices yet. It will sync the next time you save an entry.",
+      });
+    },
+    [toast]
+  );
 
   const writeSettings = useCallback(
     async (local: AppSettings, patch: Partial<AppSettings>, seedOnly: boolean) => {
@@ -143,8 +170,13 @@ export function useAppSettings(): UseAppSettingsResult {
           queryClient.setQueryData(['app-settings', pubkey], remote);
           return;
         }
-        // Merge.
-        const next = mergeForWrite(local, remote, patch);
+        // Merge. An unsynced privacy choice from an earlier blocked write rides
+        // along as part of the patch, so it beats the remote value.
+        const pendingPrivacy = readPendingPrivacy(pubkey);
+        const next = mergeForWrite(local, remote, {
+          ...patch,
+          privacyDefault: patch.privacyDefault ?? pendingPrivacy,
+        });
         writeLocalCache(pubkey, next);
         setLocalCache(next);
         // Write.
@@ -155,19 +187,25 @@ export function useAppSettings(): UseAppSettingsResult {
         if (user.method === 'bunker') cacheNip44Support(pubkey, true);
         publish(buildSettingsEvent(ciphertext), {
           onSuccess: () => {
+            clearPendingPrivacy(pubkey, next.privacyDefault);
+            notifiedPendingRef.current = undefined;
             queryClient.invalidateQueries({ queryKey: ['app-settings', pubkey] });
           },
+          onError: () => notifyPrivacyUnsynced(readPendingPrivacy(pubkey)),
         });
       } catch (error) {
+        notifyPrivacyUnsynced(readPendingPrivacy(pubkey));
         // Fail-soft: the cache already holds the change, so nothing is lost
         // and nothing scary is surfaced; the next successful write carries it.
+        // A privacyDefault change also stays marked pending, so it keeps
+        // winning over remote here until then.
         // A bunker that definitively can't encrypt is cached so we stop trying.
         if (user.method === 'bunker' && error instanceof Nip44UnsupportedError) {
           cacheNip44Support(pubkey, false);
         }
       }
     },
-    [user, pubkey, supported, publish, queryClient, fetchRemoteSettings]
+    [user, pubkey, supported, publish, queryClient, fetchRemoteSettings, notifyPrivacyUnsynced]
   );
 
   const publishSettings = useCallback(
@@ -186,6 +224,12 @@ export function useAppSettings(): UseAppSettingsResult {
       // privacyDefault overwrites; celebratedMilestones unions (monotonic);
       // lastSeenNotifications takes the max (read-state never regresses).
       const next = applySettingsPatch(settings, patch);
+      // A changed privacy choice outranks remote until a write carrying it
+      // succeeds. Re-sending the current value (every entry save does) isn't
+      // a change and doesn't mark anything pending.
+      if (patch.privacyDefault !== undefined && patch.privacyDefault !== settings.privacyDefault) {
+        setPendingPrivacy(pubkey, patch.privacyDefault);
+      }
       writeLocalCache(pubkey, next);
       setLocalCache(next);
       // Optimistically advance the query cache so the local write takes effect

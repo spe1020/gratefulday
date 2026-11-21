@@ -51,7 +51,7 @@ describe('useGratitudeEntries — kind 5 deletions from other devices', () => {
     query.mockResolvedValue([]);
     const { result } = renderHook(() => useGratitudeEntries(ME), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(query.mock.calls[0][0]).toContainEqual({ kinds: [5], authors: [ME], '#k': ['36669'], limit: 500 });
+    expect(query.mock.calls[0][0]).toContainEqual({ kinds: [5], authors: [ME], limit: 500 });
   });
 
   it('hides a day deleted elsewhere, keeps other days and a newer re-created entry', async () => {
@@ -67,6 +67,16 @@ describe('useGratitudeEntries — kind 5 deletions from other devices', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     const days = result.current.data!.map((e) => e.tags.find(([n]) => n === 'd')![1]).sort();
     expect(days).toEqual(['2026-06-14', '2026-06-15']);
+  });
+
+  it('honors a deletion from a client that omits the k tag (matched by its a coordinate)', async () => {
+    query.mockResolvedValue([
+      entry('2026-06-13', 100),
+      { ...deletion('2026-06-13', 200), tags: [['a', entryAddress(ME, '2026-06-13')]] },
+    ]);
+    const { result } = renderHook(() => useGratitudeEntries(ME), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual([]);
   });
 
   it('still honors local tombstones', async () => {

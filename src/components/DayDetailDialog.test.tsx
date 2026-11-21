@@ -829,12 +829,14 @@ describe('DayDetailDialog — base-version check before save', () => {
     await editAndClick(/save entry/i);
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'destructive', title: expect.stringMatching(/couldn't save right now/i) })
+        expect.objectContaining({ title: expect.stringMatching(/couldn't save right now/i) })
       )
     );
     expect(publish).not.toHaveBeenCalled();
     expect(screen.getByTestId('editor')).toHaveValue('morning walk, and coffee');
     expect(toast.mock.calls.some(([t]) => /still here/i.test(t.description))).toBe(true);
+    // Nothing failed: the app held back on purpose, so this toast isn't red.
+    expect(toast.mock.calls.find(([t]) => /couldn't save right now/i.test(t.title))![0].variant).toBeUndefined();
   });
 
   it('a conflict also blocks Share: no 36669 and no kind 1', async () => {

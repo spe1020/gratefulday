@@ -36,8 +36,10 @@ export function useGratitudeEntries(pubkey: string | undefined) {
             // duplicates from relays that don't replace addressable events.
             limit: 500,
           },
-          // The user's own deletions of gratitude entries (NIP-09).
-          { kinds: [5], authors: [pubkey], '#k': ['36669'], limit: 500 },
+          // The user's own deletions (NIP-09). Not filtered on `#k`: other
+          // clients may omit it. Like the day view (which filters on `#a`),
+          // a deletion counts only through its `a` coordinate, applied below.
+          { kinds: [5], authors: [pubkey], limit: 500 },
         ],
         { signal }
       );

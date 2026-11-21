@@ -292,3 +292,42 @@ export function writeLocalCache(pubkey: string, settings: AppSettings): void {
   }
   setCelebratedMilestones(pubkey, settings.celebratedMilestones.filter((m) => m > 1));
 }
+
+// --- Pending privacy default ------------------------------------------------
+// `privacyDefault` is last-write-wins, so a change this device couldn't
+// publish (relays didn't answer, decrypt failed, publish rejected) would be
+// overruled by the older remote value on the next reconcile, and then written
+// back into the cache by the next successful write. A pending marker keeps the
+// user's unsynced choice authoritative on this device until a write carrying
+// it succeeds. The two monotonic fields don't need this: union/max can't lose
+// a local value.
+
+const PENDING_PRIVACY_KEY = 'gratefulday:privacy-default-pending:v1';
+
+/** This device's privacy-default choice that hasn't reached relays yet. */
+export function readPendingPrivacy(pubkey: string): boolean | undefined {
+  const value = readMap<boolean>(PENDING_PRIVACY_KEY)[pubkey];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+export function setPendingPrivacy(pubkey: string, value: boolean): void {
+  const map = readMap<boolean>(PENDING_PRIVACY_KEY);
+  map[pubkey] = value;
+  writeMap(PENDING_PRIVACY_KEY, map);
+}
+
+/**
+ * Clear the marker once `published` reached relays — but only if it still
+ * holds that value, so a newer unsynced choice made meanwhile survives.
+ */
+export function clearPendingPrivacy(pubkey: string, published: boolean | undefined): void {
+  const map = readMap<boolean>(PENDING_PRIVACY_KEY);
+  if (map[pubkey] === undefined || map[pubkey] !== published) return;
+  delete map[pubkey];
+  writeMap(PENDING_PRIVACY_KEY, map);
+}
+
+/** Overlay an unsynced privacy choice on reconciled settings. */
+export function withPendingPrivacy(settings: AppSettings, pending: boolean | undefined): AppSettings {
+  return pending === undefined ? settings : { ...settings, privacyDefault: pending };
+}

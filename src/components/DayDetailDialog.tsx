@@ -524,7 +524,7 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
   const describeEncryptError = (error: unknown): string => {
     // Always reassure: a fail-closed save keeps the editor open with every note
     // intact, so the user can retry or switch to Public without retyping.
-    const reassure = 'Nothing was saved — your notes are still here.';
+    const reassure = 'Nothing was saved. Your notes are still here.';
     if (error instanceof Nip44UnsupportedError) {
       return `Your signer doesn't support NIP-44 encryption. ${reassure} Switch to Public to save with this signer.`;
     }
@@ -540,7 +540,7 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
    * find out.
    */
   const describeSaveError = (error: unknown): string => {
-    const kept = 'Nothing was saved — your notes are still here.';
+    const kept = 'Nothing was saved. Your notes are still here.';
 
     if (error instanceof SignerTimeoutError) {
       return `Your signer did not respond. ${kept} Check your signer app and try again.`;
@@ -594,7 +594,6 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
       toast({
         title: "Couldn't save right now",
         description: `${kept} Not enough of your relays answered to be sure this wouldn't replace newer writing. Check your connection and try again.`,
-        variant: 'destructive',
       });
       return false;
     } finally {
