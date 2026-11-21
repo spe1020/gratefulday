@@ -63,6 +63,14 @@ vi.mock('@/hooks/useAppSettings', () => ({
 vi.mock('@/hooks/useDeleteGratitudeEntry', () => ({
   useDeleteGratitudeEntry: () => ({ mutate: vi.fn(), isPending: false }),
 }));
+// Base-version check before a save: defaults to "unchanged" so the other
+// suites exercise the save path; the base-version suite overrides it.
+const checkEntryBase = vi.fn<
+  (pubkey: string, dateString: string, base: { id: string; created_at: number } | null) => Promise<'ok' | 'conflict'>
+>(() => Promise.resolve('ok'));
+vi.mock('@/hooks/useEntryBaseCheck', () => ({
+  useEntryBaseCheck: () => checkEntryBase,
+}));
 vi.mock('@/hooks/useToast', () => ({
   useToast: () => ({ toast }),
 }));
@@ -734,5 +742,125 @@ describe('DayDetailDialog — failed-save data safety', () => {
     // Encryption failed before any publish: neither the 36669 nor a kind 1 fired.
     expect(publish).not.toHaveBeenCalled();
     expect(screen.getByTestId('editor')).toHaveValue('my unsaved thoughts');
+  });
+});
+
+describe('DayDetailDialog — base-version check before save', () => {
+  const savedEntry: NostrEvent = {
+    ...encryptedEntry,
+    id: 'evt-base',
+    content: 'morning walk',
+    created_at: 1_700_000_000,
+    tags: [
+      ['d', '2026-06-13'],
+      ['day', '164'],
+      ['published_at', '1700000000'],
+    ],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    publish.mockReset();
+    checkEntryBase.mockImplementation(() => Promise.resolve('ok'));
+    mockNip44.mockReturnValue({ supported: false });
+    mockUser.mockReturnValue({ user: { pubkey: 'pk-self', method: 'extension', signer: {} } });
+    mockExistingEntry.mockReturnValue({ data: savedEntry });
+    mockDecrypted.mockReturnValue({
+      content: 'morning walk',
+      isEncrypted: false,
+      isDecrypting: false,
+      decryptError: null,
+    });
+  });
+
+  async function editAndClick(buttonName: RegExp, text = 'morning walk, and coffee') {
+    render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: /edit this moment/i }));
+    fireEvent.change(screen.getByTestId('editor'), { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: buttonName }));
+  }
+
+  it('checks against the version the editor loaded, then saves when unchanged', async () => {
+    await editAndClick(/save entry/i);
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    expect(checkEntryBase).toHaveBeenCalledWith('pk-self', '2026-06-13', {
+      id: 'evt-base',
+      created_at: 1_700_000_000,
+    });
+    // The check runs before anything is published.
+    expect(checkEntryBase.mock.invocationCallOrder[0]).toBeLessThan(
+      publish.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('checks a new day against "no version"', async () => {
+    mockExistingEntry.mockReturnValue({ data: null });
+    mockDecrypted.mockReturnValue({ content: '', isEncrypted: false, isDecrypting: false, decryptError: null });
+    render(<DayDetailDialog day={TODAY} open onOpenChange={() => {}} />);
+    fireEvent.change(await screen.findByTestId('editor'), { target: { value: 'first words' } });
+    fireEvent.click(screen.getByRole('button', { name: /save entry/i }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    expect(checkEntryBase).toHaveBeenCalledWith('pk-self', '2026-06-13', null);
+  });
+
+  it('does not save when the day changed elsewhere; keeps the notes and says so', async () => {
+    checkEntryBase.mockImplementation(() => Promise.resolve('conflict'));
+    await editAndClick(/save entry/i);
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.objectContaining({ variant: 'destructive', title: expect.stringMatching(/changed on another device/i) })
+      )
+    );
+    expect(publish).not.toHaveBeenCalled();
+    expect(updateAppSettings).not.toHaveBeenCalled();
+    expect(screen.getByTestId('editor')).toHaveValue('morning walk, and coffee');
+    // The cached day is marked stale (not refetched into the open editor) so
+    // reopening shows the latest version.
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ['gratitude-entry', 'pk-self', '2026-06-13'],
+      refetchType: 'none',
+    });
+    // Save stays available for a retry.
+    await waitFor(() => expect(screen.getByRole('button', { name: /save entry/i })).toBeEnabled());
+  });
+
+  it('does not save when too few relays answered; keeps the notes and says so', async () => {
+    checkEntryBase.mockImplementation(() => Promise.reject(new Error('Only 1 of 5 relays answered in time')));
+    await editAndClick(/save entry/i);
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.objectContaining({ title: expect.stringMatching(/couldn't save right now/i) })
+      )
+    );
+    expect(publish).not.toHaveBeenCalled();
+    expect(screen.getByTestId('editor')).toHaveValue('morning walk, and coffee');
+    expect(toast.mock.calls.some(([t]) => /still here/i.test(t.description))).toBe(true);
+    // Nothing failed: the app held back on purpose, so this toast isn't red.
+    expect(toast.mock.calls.find(([t]) => /couldn't save right now/i.test(t.title))![0].variant).toBeUndefined();
+  });
+
+  it('a conflict also blocks Share: no 36669 and no kind 1', async () => {
+    checkEntryBase.mockImplementation(() => Promise.resolve('conflict'));
+    await editAndClick(/share to nostr/i);
+    await waitFor(() => expect(toast).toHaveBeenCalled());
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('after a successful save, the next save checks against the event just published', async () => {
+    publish.mockImplementation((event, opts) =>
+      opts?.onSuccess?.({ ...event, id: 'evt-mine', pubkey: 'pk-self', created_at: 1_800_000_000, sig: 'x' })
+    );
+    await editAndClick(/save entry/i);
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+
+    // Edit again and save a second time.
+    fireEvent.click(screen.getAllByRole('button', { name: /edit this moment/i })[0]);
+    fireEvent.change(screen.getByTestId('editor'), { target: { value: 'second pass' } });
+    fireEvent.click(screen.getByRole('button', { name: /save entry/i }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(2));
+    expect(checkEntryBase).toHaveBeenLastCalledWith('pk-self', '2026-06-13', {
+      id: 'evt-mine',
+      created_at: 1_800_000_000,
+    });
   });
 });

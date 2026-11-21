@@ -82,6 +82,34 @@ export function reconcile(local: AppSettings, remote: AppSettings | null): AppSe
 }
 
 /**
+ * Apply one local change on top of a base. `privacyDefault` overwrites when the
+ * patch sets it; `celebratedMilestones` unions (monotonic); and
+ * `lastSeenNotifications` takes the max (read-state never regresses).
+ */
+export function applySettingsPatch(base: AppSettings, patch: Partial<AppSettings>): AppSettings {
+  return {
+    privacyDefault: patch.privacyDefault ?? base.privacyDefault,
+    celebratedMilestones: unionSorted(base.celebratedMilestones, patch.celebratedMilestones ?? []),
+    lastSeenNotifications:
+      Math.max(base.lastSeenNotifications ?? 0, patch.lastSeenNotifications ?? 0) || undefined,
+  };
+}
+
+/**
+ * The object to publish: read, merge, then write. Reconcile the local state
+ * against the remote copy fetched just before this write, then re-apply the
+ * change being made, so neither a field another device changed nor the
+ * change itself is lost.
+ */
+export function mergeForWrite(
+  local: AppSettings,
+  remote: AppSettings | null,
+  patch: Partial<AppSettings>
+): AppSettings {
+  return applySettingsPatch(reconcile(local, remote), patch);
+}
+
+/**
  * Whether to seed a relay event from existing local values: only when no
  * remote event exists yet and the local cache actually holds something worth
  * preserving (a chosen privacy default or a celebrated milestone).
@@ -145,8 +173,9 @@ export function encryptSettings(
 }
 
 /**
- * Decrypt + parse a settings event's content. Returns null on any failure so
- * a corrupt or undecryptable event reads as "no remote settings" (fail-soft).
+ * Decrypt + parse a settings event's content. Returns null on any failure.
+ * Callers that are about to write must use `resolveRemoteSettings`, which
+ * turns that null into an error instead of "no remote settings".
  */
 export async function decryptSettings(
   signer: NostrSigner,
@@ -159,6 +188,35 @@ export async function decryptSettings(
   } catch {
     return null;
   }
+}
+
+/**
+ * The remote settings event exists but could not be decrypted or parsed. This
+ * is "unknown", never "no settings": writing over it would replace whatever it
+ * holds.
+ */
+export class SettingsUnreadableError extends Error {
+  constructor() {
+    super('Remote settings could not be decrypted');
+    this.name = 'SettingsUnreadableError';
+  }
+}
+
+/**
+ * Resolve fetched settings events to the remote state: `null` only when no
+ * event exists. Throws `SettingsUnreadableError` when the newest event can't
+ * be decrypted, so callers can't mistake it for an empty remote.
+ */
+export async function resolveRemoteSettings(
+  signer: NostrSigner,
+  pubkey: string,
+  events: NostrEvent[]
+): Promise<AppSettings | null> {
+  const latest = pickLatestEvent(events);
+  if (!latest) return null;
+  const settings = await decryptSettings(signer, pubkey, latest);
+  if (!settings) throw new SettingsUnreadableError();
+  return settings;
 }
 
 /** Publish template for a settings event (everything but signing/created_at). */
@@ -233,4 +291,134 @@ export function writeLocalCache(pubkey: string, settings: AppSettings): void {
     writeMap(LAST_SEEN_KEY, lastSeenMap);
   }
   setCelebratedMilestones(pubkey, settings.celebratedMilestones.filter((m) => m > 1));
+}
+
+// --- Pending privacy default ------------------------------------------------
+// `privacyDefault` is last-write-wins, so a change this device couldn't
+// publish (relays didn't answer, decrypt failed, publish rejected) would be
+// overruled by the older remote value on the next reconcile, and then written
+// back into the cache by the next successful write. A pending marker keeps the
+// user's unsynced choice authoritative on this device until a write carrying
+// it succeeds. The two monotonic fields don't need this: union/max can't lose
+// a local value.
+
+const PENDING_PRIVACY_KEY = 'gratefulday:privacy-default-pending:v1';
+
+/** This device's privacy-default choice that hasn't reached relays yet. */
+export function readPendingPrivacy(pubkey: string): boolean | undefined {
+  const value = readMap<boolean>(PENDING_PRIVACY_KEY)[pubkey];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+export function setPendingPrivacy(pubkey: string, value: boolean): void {
+  const map = readMap<boolean>(PENDING_PRIVACY_KEY);
+  map[pubkey] = value;
+  writeMap(PENDING_PRIVACY_KEY, map);
+}
+
+/**
+ * Clear the marker once `published` reached relays — but only if it still
+ * holds that value, so a newer unsynced choice made meanwhile survives.
+ */
+export function clearPendingPrivacy(pubkey: string, published: boolean | undefined): void {
+  const map = readMap<boolean>(PENDING_PRIVACY_KEY);
+  if (map[pubkey] === undefined || map[pubkey] !== published) return;
+  delete map[pubkey];
+  writeMap(PENDING_PRIVACY_KEY, map);
+}
+
+/** Overlay an unsynced privacy choice on reconciled settings. */
+export function withPendingPrivacy(settings: AppSettings, pending: boolean | undefined): AppSettings {
+  return pending === undefined ? settings : { ...settings, privacyDefault: pending };
+}
+
+// --- Newest settings event this device knows of -----------------------------
+// Relays don't all hold the same copy: a publish can reach only some of them,
+// and a read is answered by whichever relays respond. So a read can return an
+// event OLDER than one this device already published or applied. For the two
+// monotonic fields that's harmless (union/max). For `privacyDefault` it is
+// not: the older value would win the reconcile and the next write would
+// publish it, silently reverting the user's choice.
+//
+// We persist the `created_at` of the newest settings event this device has
+// published or applied. The local cache holds `privacyDefault` as of that
+// event, so when relays return something older, the local value stands.
+
+const KNOWN_AT_KEY = 'gratefulday:settings-known-at:v1';
+
+/** `created_at` of the newest settings event this device published or applied (0: none). */
+export function readKnownSettingsAt(pubkey: string): number {
+  const value = readMap<number>(KNOWN_AT_KEY)[pubkey];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/** Record a settings event this device published or applied. Never moves backwards. */
+export function noteKnownSettingsAt(pubkey: string, createdAt: number): void {
+  if (!(createdAt > readKnownSettingsAt(pubkey))) return;
+  const map = readMap<number>(KNOWN_AT_KEY);
+  map[pubkey] = createdAt;
+  writeMap(KNOWN_AT_KEY, map);
+}
+
+/**
+ * Turn what a relay read returned into the remote state to reconcile with.
+ *
+ * - Not newer than what this device already knows (a stale copy, or the very
+ *   event it last published/applied): keep its monotonic fields (they only
+ *   ever add), but `privacyDefault` comes from the local cache, which already
+ *   reflects that newest event.
+ * - Newer: apply it. Remember its timestamp and, unless an unsynced local
+ *   choice is pending, store its `privacyDefault` locally so a later stale
+ *   read can't undo it.
+ */
+export function resolveAgainstKnown(
+  pubkey: string,
+  fetched: AppSettings | null,
+  fetchedCreatedAt: number | undefined
+): AppSettings | null {
+  if (!fetched) return null;
+  const at = fetchedCreatedAt ?? 0;
+  const known = readKnownSettingsAt(pubkey);
+  if (at <= known) {
+    const localPrivacy = readLocalCache(pubkey).privacyDefault;
+    return { ...fetched, privacyDefault: localPrivacy ?? fetched.privacyDefault };
+  }
+  if (at > known) {
+    noteKnownSettingsAt(pubkey, at);
+    if (fetched.privacyDefault !== undefined && readPendingPrivacy(pubkey) === undefined) {
+      const privacyMap = readMap<boolean>(PRIVACY_DEFAULT_KEY);
+      privacyMap[pubkey] = fetched.privacyDefault;
+      writeMap(PRIVACY_DEFAULT_KEY, privacyMap);
+    }
+  }
+  return fetched;
+}
+
+/**
+ * `created_at` for the next settings event: now, but always after the newest
+ * event this device knows of. Two writes in the same second would otherwise
+ * tie, and relays keep only one of a tie.
+ *
+ * Deliberately not capped at "now": if the newest known event is future-dated
+ * (another device's clock is wrong), an event stamped "now" would be accepted
+ * and then ignored, because relays keep the future-dated one. Stamping just
+ * after it is the only way this device's change can take effect.
+ */
+export function nextSettingsCreatedAt(pubkey: string, nowSeconds = Math.floor(Date.now() / 1000)): number {
+  return Math.max(nowSeconds, readKnownSettingsAt(pubkey) + 1);
+}
+
+/**
+ * The privacy default to show and to build on, in priority order: an unsynced
+ * local choice; the local cache (every newer relay event is written into it by
+ * `resolveAgainstKnown`, and every tab shares it); and only for a device with
+ * nothing stored yet, whatever the fetched copy says. Cached query data never
+ * outranks the local cache: it can predate a change made in another tab.
+ */
+export function effectivePrivacyDefault(
+  local: AppSettings,
+  remote: AppSettings | null,
+  pending: boolean | undefined
+): boolean | undefined {
+  return pending ?? local.privacyDefault ?? remote?.privacyDefault;
 }

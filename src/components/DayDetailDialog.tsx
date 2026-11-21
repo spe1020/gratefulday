@@ -31,6 +31,8 @@ import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useNostrPublish, SignerTimeoutError } from '@/hooks/useNostrPublish';
 import { useGratitudeEntry } from '@/hooks/useGratitudeEntries';
 import { useDeleteGratitudeEntry } from '@/hooks/useDeleteGratitudeEntry';
+import { useEntryBaseCheck } from '@/hooks/useEntryBaseCheck';
+import { type EntryBase, toEntryBase } from '@/lib/entryVersion';
 import { useNip44Support, cacheNip44Support } from '@/hooks/useNip44Support';
 import { useAppSettings } from '@/hooks/useAppSettings';
 import { useDecryptedEntry } from '@/hooks/useDecryptedEntry';
@@ -210,6 +212,7 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
   const [showLoginDialog, setShowLoginDialog] = useState(false);
   const [isPrivate, setIsPrivate] = useState(false);
   const [isEncrypting, setIsEncrypting] = useState(false);
+  const [isCheckingBase, setIsCheckingBase] = useState(false);
   const [showNip44Hint, setShowNip44Hint] = useState(false);
   const [showShareGuard, setShowShareGuard] = useState(false);
   const { user } = useCurrentUser();
@@ -235,6 +238,7 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
   const { mutate: createEvent, isPending } = useNostrPublish();
   const { mutate: publishNote, isPending: isPublishingNote } = useNostrPublish();
   const { mutate: deleteEntry, isPending: isDeleting } = useDeleteGratitudeEntry();
+  const checkEntryBase = useEntryBaseCheck();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -261,6 +265,9 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
   // never silently overwrite content the user can't currently read.
   const seededKeyRef = useRef<string | null>(null);
   const savedContentRef = useRef('');
+  // The relay version this editor session started from (or last saved). A
+  // save first checks the day still has exactly this version on relays.
+  const baseRef = useRef<EntryBase | null>(null);
   useEffect(() => {
     if (!open) {
       seededKeyRef.current = null;
@@ -281,6 +288,7 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
       if (needsWisdomDraft) pendingFocusIdRef.current = note.id;
       setNotes([note]);
       savedContentRef.current = '';
+      baseRef.current = null;
       seededKeyRef.current = key;
       return;
     }
@@ -292,6 +300,7 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
       // Fail-closed: couldn't read it, so don't seed plaintext. Latch to stop
       // re-firing; the locked UI + disabled save/share guard the rest.
       setNotes([makeNote('', 'draft')]);
+      baseRef.current = toEntryBase(existingEntry);
       seededKeyRef.current = key;
       return;
     }
@@ -310,6 +319,7 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
     }
     setNotes(initialNotes);
     savedContentRef.current = joinNotes(seeded);
+    baseRef.current = toEntryBase(existingEntry);
     seededKeyRef.current = key;
     // Keyed on existingEntry?.id, not the object: a background refetch that
     // returns an identity-changed-but-same entry must not re-fire seeding.
@@ -418,7 +428,10 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
   // saved note as a published card. Publishing doesn't invalidate the entry
   // query, so we flip optimistically and advance the seed latch to the new
   // event id (a later refetch with that id then won't re-seed).
-  const markEntryPublished = (savedContent: string, newEventId: string, hasNewWriting: boolean) => {
+  const markEntryPublished = (savedEvent: NostrEvent, savedContent: string, hasNewWriting: boolean) => {
+    const newEventId = savedEvent.id;
+    // What we just published is now the version the next save builds on.
+    baseRef.current = toEntryBase(savedEvent);
     if (user) {
       linkWisdomReflection(user.pubkey, day.dateString, newEventId,
         wisdomContexts.map((item) => item.wisdom.id), hasNewWriting);
@@ -511,7 +524,7 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
   const describeEncryptError = (error: unknown): string => {
     // Always reassure: a fail-closed save keeps the editor open with every note
     // intact, so the user can retry or switch to Public without retyping.
-    const reassure = 'Nothing was saved — your notes are still here.';
+    const reassure = 'Nothing was saved. Your notes are still here.';
     if (error instanceof Nip44UnsupportedError) {
       return `Your signer doesn't support NIP-44 encryption. ${reassure} Switch to Public to save with this signer.`;
     }
@@ -527,7 +540,7 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
    * find out.
    */
   const describeSaveError = (error: unknown): string => {
-    const kept = 'Nothing was saved — your notes are still here.';
+    const kept = 'Nothing was saved. Your notes are still here.';
 
     if (error instanceof SignerTimeoutError) {
       return `Your signer did not respond. ${kept} Check your signer app and try again.`;
@@ -546,6 +559,46 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
     // Signer rejections surface here — "user rejected", an ungranted event
     // kind — which is exactly what needs to reach the user.
     return message ? `${message}. ${kept}` : `${kept} Please try again.`;
+  };
+
+  /**
+   * Base-version check: re-read this day from relays and make sure nobody
+   * saved or deleted it since this editor loaded it. Returns false (with a
+   * toast, editor untouched) when it changed elsewhere or when too few relays
+   * answered to know. Never publishes.
+   */
+  const confirmBaseUnchanged = async (): Promise<boolean> => {
+    if (!user || !day) return false;
+    const kept = 'Nothing was saved. Your notes are still here.';
+    setIsCheckingBase(true);
+    try {
+      const result = await checkEntryBase(user.pubkey, day.dateString, baseRef.current);
+      if (result === 'ok') return true;
+      // Mark the cached day stale (without refetching into the open editor) so
+      // reopening it loads the latest version.
+      queryClient.invalidateQueries({
+        queryKey: ['gratitude-entry', user.pubkey, day.dateString],
+        refetchType: 'none',
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['gratitude-entries', user.pubkey],
+        refetchType: 'none',
+      });
+      toast({
+        title: 'This day changed on another device',
+        description: `${kept} To see the latest version, copy anything you want to keep, then close and reopen this day.`,
+        variant: 'destructive',
+      });
+      return false;
+    } catch {
+      toast({
+        title: "Couldn't save right now",
+        description: `${kept} Not enough of your relays answered to be sure this wouldn't replace newer writing. Check your connection and try again.`,
+      });
+      return false;
+    } finally {
+      setIsCheckingBase(false);
+    }
   };
 
   const handleSave = async () => {
@@ -570,6 +623,9 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
     // Capture actual content changes before async encryption/publishing. Merely
     // entering Edit mode, or normalizing whitespace, isn't new reflection text.
     const hasNewWriting = normalizeNotes(joinedNotes) !== savedContentRef.current;
+
+    if (!(await confirmBaseUnchanged())) return;
+
     let entryEvent;
     try {
       entryEvent = await buildEntryEvent();
@@ -598,7 +654,7 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
             : 'Your reflection has been saved.',
         });
         // Whole entry is now committed — every note becomes a published card.
-        markEntryPublished(savedContent, data.id, hasNewWriting);
+        markEntryPublished(data, savedContent, hasNewWriting);
         // Instant streak/calendar/heatmap/milestone refresh (no refetch).
         cacheSavedEntry(data);
       },
@@ -634,6 +690,8 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
     const trimmedText = joinedNotes;
     const hasNewWriting = normalizeNotes(trimmedText) !== savedContentRef.current;
 
+    if (!(await confirmBaseUnchanged())) return;
+
     // First, save as kind 36669 (encrypted when Private is selected — the
     // kind 1 note below still shares the plaintext by explicit user action).
     let entryEvent;
@@ -657,7 +715,7 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
         onSuccess: (data) => {
           // The journal entry is committed — reflect published cards now (the
           // separate kind 1 share below doesn't affect the entry's state).
-          markEntryPublished(trimmedText, data.id, hasNewWriting);
+          markEntryPublished(data, trimmedText, hasNewWriting);
           // Instant streak/calendar/heatmap/milestone refresh (no refetch).
           cacheSavedEntry(data);
 
@@ -1093,10 +1151,10 @@ https://gratefulday.space`;
                 </Button>
                 <Button
                   onClick={handleSave}
-                  disabled={isEncrypting || isPending || isPublishingNote || blockSaveShare || !hasContent}
+                  disabled={isCheckingBase || isEncrypting || isPending || isPublishingNote || blockSaveShare || !hasContent}
                   className="min-w-[100px] order-1 sm:order-2"
                 >
-                  {isEncrypting || isPending ? (
+                  {isCheckingBase || isEncrypting || isPending ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                       {isEncrypting ? 'Encrypting…' : 'Saving entry…'}
@@ -1110,14 +1168,14 @@ https://gratefulday.space`;
                 </Button>
                 <Button
                   onClick={handleShareClick}
-                  disabled={isEncrypting || isPending || isPublishingNote || blockSaveShare || !hasContent}
+                  disabled={isCheckingBase || isEncrypting || isPending || isPublishingNote || blockSaveShare || !hasContent}
                   variant="default"
                   className="bg-amber-600 hover:bg-amber-700 dark:bg-amber-500 dark:hover:bg-amber-600 order-3"
                 >
-                  {isEncrypting || isPending || isPublishingNote ? (
+                  {isCheckingBase || isEncrypting || isPending || isPublishingNote ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      {isEncrypting ? 'Encrypting…' : isPending ? 'Saving...' : 'Sharing...'}
+                      {isEncrypting ? 'Encrypting…' : isCheckingBase || isPending ? 'Saving...' : 'Sharing...'}
                     </>
                   ) : (
                     <>

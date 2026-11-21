@@ -8,6 +8,19 @@ import { generateSecretKey, getPublicKey } from 'nostr-tools';
 import { NSecSigner } from '@nostrify/nostrify';
 import type { NostrEvent } from '@nostrify/nostrify';
 import {
+  clearPendingPrivacy,
+  effectivePrivacyDefault,
+  nextSettingsCreatedAt,
+  noteKnownSettingsAt,
+  readKnownSettingsAt,
+  resolveAgainstKnown,
+  readPendingPrivacy,
+  setPendingPrivacy,
+  withPendingPrivacy,
+  SettingsUnreadableError,
+  applySettingsPatch,
+  mergeForWrite,
+  resolveRemoteSettings,
   SETTINGS_D_TAG,
   SETTINGS_KIND,
   buildSettingsEvent,
@@ -237,5 +250,171 @@ describe('durability across a cache wipe (Phase 3)', () => {
         isCelebrated: (m) => settings.celebratedMilestones.includes(m),
       })
     ).toBeNull();
+  });
+});
+
+describe('read → merge → write helpers', () => {
+  it('applySettingsPatch: privacy overwrites, milestones union, lastSeen max', () => {
+    const base = { privacyDefault: true, celebratedMilestones: [7], lastSeenNotifications: 500 };
+    expect(
+      applySettingsPatch(base, { privacyDefault: false, celebratedMilestones: [30], lastSeenNotifications: 400 })
+    ).toEqual({ privacyDefault: false, celebratedMilestones: [7, 30], lastSeenNotifications: 500 });
+    expect(applySettingsPatch(base, {})).toEqual(base);
+  });
+
+  it('mergeForWrite keeps what another device wrote and still applies this change', () => {
+    const local = { privacyDefault: true, celebratedMilestones: [7], lastSeenNotifications: 100 };
+    // Another device since: celebrated 30, read notifications later, chose public.
+    const remote = { privacyDefault: false, celebratedMilestones: [30], lastSeenNotifications: 900 };
+    // This device is recording milestone 14 only.
+    expect(mergeForWrite(local, remote, { celebratedMilestones: [14] })).toEqual({
+      privacyDefault: false, // remote wins: this change didn't touch it
+      celebratedMilestones: [7, 14, 30],
+      lastSeenNotifications: 900,
+    });
+    // This device is choosing private now: the change wins.
+    expect(mergeForWrite(local, remote, { privacyDefault: true }).privacyDefault).toBe(true);
+  });
+
+  it('mergeForWrite with no remote event keeps local', () => {
+    const local = { privacyDefault: true, celebratedMilestones: [7] };
+    expect(mergeForWrite(local, null, {})).toEqual({ ...local, lastSeenNotifications: undefined });
+  });
+});
+
+describe('resolveRemoteSettings', () => {
+  it('returns null only when no event exists', async () => {
+    const sk = generateSecretKey();
+    const signer = new NSecSigner(sk);
+    expect(await resolveRemoteSettings(signer, getPublicKey(sk), [])).toBeNull();
+  });
+
+  it('decrypts the newest event', async () => {
+    const sk = generateSecretKey();
+    const pubkey = getPublicKey(sk);
+    const signer = new NSecSigner(sk);
+    const older = settingsEvent(await encryptSettings(signer, pubkey, { celebratedMilestones: [7] }), 1);
+    const newer = settingsEvent(await encryptSettings(signer, pubkey, { celebratedMilestones: [30] }), 2);
+    const result = await resolveRemoteSettings(signer, pubkey, [older, newer]);
+    expect(result?.celebratedMilestones).toEqual([30]);
+  });
+
+  it('throws SettingsUnreadableError when the newest event cannot be decrypted (never "no settings")', async () => {
+    const sk = generateSecretKey();
+    const pubkey = getPublicKey(sk);
+    const signer = new NSecSigner(sk);
+    const readable = settingsEvent(await encryptSettings(signer, pubkey, { celebratedMilestones: [7] }), 1);
+    const corrupt = settingsEvent('not-a-nip44-payload', 2);
+    await expect(resolveRemoteSettings(signer, pubkey, [readable, corrupt])).rejects.toBeInstanceOf(
+      SettingsUnreadableError
+    );
+  });
+});
+
+describe('pending privacy marker', () => {
+  it('clears only when it still holds the published value', () => {
+    setPendingPrivacy('pk', true);
+    // A newer choice (false) was made before the publish of `true` succeeded.
+    setPendingPrivacy('pk', false);
+    clearPendingPrivacy('pk', true);
+    expect(readPendingPrivacy('pk')).toBe(false);
+    clearPendingPrivacy('pk', false);
+    expect(readPendingPrivacy('pk')).toBeUndefined();
+  });
+
+  it('is per pubkey', () => {
+    setPendingPrivacy('pk-a', true);
+    expect(readPendingPrivacy('pk-b')).toBeUndefined();
+  });
+
+  it('withPendingPrivacy overlays only when pending', () => {
+    const s = { privacyDefault: false, celebratedMilestones: [7] };
+    expect(withPendingPrivacy(s, undefined)).toBe(s);
+    expect(withPendingPrivacy(s, true)).toEqual({ ...s, privacyDefault: true });
+  });
+});
+
+describe('resolveAgainstKnown — relay copies older than what this device knows', () => {
+  const PK = 'pk-known';
+  const KEYS = [
+    'gratefulday:privacy-default:v1',
+    'gratefulday:privacy-default-pending:v1',
+    'gratefulday:settings-known-at:v1',
+    'gratefulday:milestones:v1',
+    'gratefulday:last-seen-notifications:v1',
+  ];
+  beforeEach(() => {
+    for (const k of KEYS) localStorage.removeItem(k);
+  });
+
+  it('returns null for no event', () => {
+    expect(resolveAgainstKnown(PK, null, undefined)).toBeNull();
+  });
+
+  it('applies the first event a fresh device sees', () => {
+    const out = resolveAgainstKnown(PK, { privacyDefault: false, celebratedMilestones: [7] }, 100);
+    expect(out).toEqual({ privacyDefault: false, celebratedMilestones: [7] });
+    expect(readKnownSettingsAt(PK)).toBe(100);
+    expect(readLocalCache(PK).privacyDefault).toBe(false);
+  });
+
+  it('keeps the local privacy default over an older copy, but keeps its monotonic fields', () => {
+    writeLocalCache(PK, { privacyDefault: true, celebratedMilestones: [] });
+    noteKnownSettingsAt(PK, 200);
+    const out = resolveAgainstKnown(
+      PK,
+      { privacyDefault: false, celebratedMilestones: [7], lastSeenNotifications: 50 },
+      100
+    );
+    expect(out).toEqual({ privacyDefault: true, celebratedMilestones: [7], lastSeenNotifications: 50 });
+    expect(readKnownSettingsAt(PK)).toBe(200);
+    expect(readLocalCache(PK).privacyDefault).toBe(true);
+  });
+
+  it('applies a newer event and stores its privacy default', () => {
+    writeLocalCache(PK, { privacyDefault: true, celebratedMilestones: [] });
+    noteKnownSettingsAt(PK, 200);
+    const out = resolveAgainstKnown(PK, { privacyDefault: false, celebratedMilestones: [] }, 300);
+    expect(out?.privacyDefault).toBe(false);
+    expect(readKnownSettingsAt(PK)).toBe(300);
+    expect(readLocalCache(PK).privacyDefault).toBe(false);
+  });
+
+  it('does not overwrite an unsynced local choice when applying a newer event', () => {
+    writeLocalCache(PK, { privacyDefault: true, celebratedMilestones: [] });
+    setPendingPrivacy(PK, true);
+    resolveAgainstKnown(PK, { privacyDefault: false, celebratedMilestones: [] }, 300);
+    expect(readLocalCache(PK).privacyDefault).toBe(true);
+    expect(readKnownSettingsAt(PK)).toBe(300);
+  });
+
+  it('at exactly the known time the local privacy default stands (same-second tie from elsewhere)', () => {
+    writeLocalCache(PK, { privacyDefault: true, celebratedMilestones: [] });
+    noteKnownSettingsAt(PK, 200);
+    const out = resolveAgainstKnown(PK, { privacyDefault: false, celebratedMilestones: [7] }, 200);
+    expect(out).toEqual({ privacyDefault: true, celebratedMilestones: [7] });
+    expect(readLocalCache(PK).privacyDefault).toBe(true);
+  });
+
+  it('effectivePrivacyDefault: pending, then local, then (only if nothing local) remote', () => {
+    const local = (privacyDefault?: boolean) => ({ privacyDefault, celebratedMilestones: [] });
+    expect(effectivePrivacyDefault(local(true), local(false), undefined)).toBe(true);
+    expect(effectivePrivacyDefault(local(true), local(true), false)).toBe(false);
+    expect(effectivePrivacyDefault(local(undefined), local(false), undefined)).toBe(false);
+    expect(effectivePrivacyDefault(local(undefined), null, undefined)).toBeUndefined();
+  });
+
+  it('never moves the known time backwards, and keeps accounts separate', () => {
+    noteKnownSettingsAt(PK, 200);
+    noteKnownSettingsAt(PK, 150);
+    expect(readKnownSettingsAt(PK)).toBe(200);
+    expect(readKnownSettingsAt('pk-someone-else')).toBe(0);
+  });
+
+  it('stamps the next event after the newest known one', () => {
+    noteKnownSettingsAt(PK, 500);
+    expect(nextSettingsCreatedAt(PK, 400)).toBe(501);
+    expect(nextSettingsCreatedAt(PK, 500)).toBe(501);
+    expect(nextSettingsCreatedAt(PK, 900)).toBe(900);
   });
 });

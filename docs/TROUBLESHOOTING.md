@@ -152,6 +152,34 @@ Try making a small change to verify hot reload works:
 
 If hot reload doesn't work, there might be a connection issue between the browser and Vite.
 
+## "Couldn't save right now" / Settings Not Syncing
+
+Before the web app saves an entry or publishes settings, it re-reads the
+current version from your **read relays** and only writes if a strict majority
+of them answer in time (see `src/lib/relayQuery.ts`). This stops one browser or
+device from silently replacing writing, deletions, or privacy settings made on
+another one.
+
+**The trade-off:** if half or more of your read relays are down, very slow, or
+require authentication, the app cannot confirm what is already stored, so it
+refuses to write. Examples: 1 dead relay out of 2, or 2 out of 4. One dead
+relay out of the five defaults is fine.
+
+When a write is blocked, nothing is lost:
+
+- **Entries:** the editor stays open with your notes intact and shows
+  "Couldn't save right now". Save again once relays respond.
+- **Settings** (privacy default, celebrated milestones, notification
+  read-state): the change is kept on this device and is published with the
+  next settings write that succeeds. A changed privacy default shows a
+  one-time "Privacy default saved on this device" notice.
+
+Showing settings is not held to the same rule: the app displays whatever
+settings it could fetch, plus what is cached on the device.
+
+**If saves are blocked repeatedly:** check your connection, then review your
+relay list and remove or replace relays that no longer respond.
+
 ## Still Having Issues?
 
 1. **Check the browser console** - This is the most important step

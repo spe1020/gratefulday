@@ -8,7 +8,9 @@
  * this set. An entry re-created for the same day later (with a newer
  * created_at than the deletion) is not filtered.
  *
- * Nothing writes tombstones yet — the delete flow populates this store.
+ * The delete flow populates this store. Deletions made on another device or
+ * client reach this one as the user's own kind 5 events; `tombstonesFromDeletions`
+ * turns those into the same map shape so both sources filter identically.
  */
 
 import type { NostrEvent } from '@nostrify/nostrify';
@@ -70,4 +72,36 @@ export function isEntryTombstoned(event: NostrEvent, tombstones: TombstoneMap): 
 
   const deletedAt = tombstones[entryAddress(event.pubkey, dTag)];
   return deletedAt !== undefined && event.created_at <= deletedAt;
+}
+
+/**
+ * Build a tombstone map from fetched NIP-09 deletion events (kind 5). Only a
+ * deletion signed by the entry's own author counts, and only for `a`
+ * coordinates of that author's gratitude entries; anything else is ignored.
+ * Multiple deletions of one address keep the latest timestamp.
+ */
+export function tombstonesFromDeletions(events: NostrEvent[], pubkey: string): TombstoneMap {
+  const prefix = `36669:${pubkey}:`;
+  const map: TombstoneMap = {};
+  for (const event of events) {
+    if (event.kind !== 5 || event.pubkey !== pubkey) continue;
+    for (const [name, value] of event.tags) {
+      if (name !== 'a' || typeof value !== 'string' || !value.startsWith(prefix)) continue;
+      if (value.length === prefix.length) continue;
+      map[value] = Math.max(map[value] ?? 0, event.created_at);
+    }
+  }
+  return map;
+}
+
+/** Combine tombstone maps, keeping the latest deletion time per address. */
+export function mergeTombstones(...maps: TombstoneMap[]): TombstoneMap {
+  const merged: TombstoneMap = {};
+  for (const map of maps) {
+    for (const [address, deletedAt] of Object.entries(map)) {
+      if (typeof deletedAt !== 'number') continue;
+      merged[address] = Math.max(merged[address] ?? 0, deletedAt);
+    }
+  }
+  return merged;
 }
