@@ -5,10 +5,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { NostrEvent } from '@nostrify/nostrify';
 import type { AppSettings } from '@/lib/appSettings';
 
-// Every relay read in the hook must go through queryForWrite; the pool's own
-// query() is a spy that must never be called.
+// Display reads go through queryForDisplay (tolerant) and every read that
+// protects a write through queryForWrite (strict); the pool's own query() is
+// a spy that must never be called.
 const nostr = { query: vi.fn(), req: vi.fn() };
 const queryForWrite = vi.fn<(...args: unknown[]) => Promise<NostrEvent[]>>();
+const queryForDisplay = vi.fn<(...args: unknown[]) => Promise<NostrEvent[]>>();
+// The logged-in account; tests switch it to simulate an account change.
+let currentUser = { pubkey: 'pk-self', method: 'extension', signer: {} };
 const resolveRemoteSettings = vi.fn<(...args: unknown[]) => Promise<AppSettings | null>>();
 const encryptSettings = vi.fn<(signer: unknown, pubkey: string, s: AppSettings) => Promise<string>>();
 const publish = vi.fn();
@@ -30,18 +34,22 @@ vi.mock('@/hooks/useAppContext', () => ({
   }),
 }));
 vi.mock('@/hooks/useCurrentUser', () => ({
-  useCurrentUser: () => ({ user: { pubkey: 'pk-self', method: 'extension', signer: {} } }),
+  useCurrentUser: () => ({ user: currentUser }),
 }));
 vi.mock('@/hooks/useNip44Support', () => ({
   useNip44Support: () => ({ supported: true }),
   cacheNip44Support: vi.fn(),
 }));
 vi.mock('@/hooks/useNostrPublish', () => ({
-  useNostrPublish: () => ({ mutate: publish }),
+  useNostrPublish: () => ({ mutateAsync: publish }),
 }));
 vi.mock('@/lib/relayQuery', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/relayQuery')>();
-  return { ...actual, queryForWrite: (...args: unknown[]) => queryForWrite(...args) };
+  return {
+    ...actual,
+    queryForWrite: (...args: unknown[]) => queryForWrite(...args),
+    queryForDisplay: (...args: unknown[]) => queryForDisplay(...args),
+  };
 });
 vi.mock('@/lib/appSettings', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/appSettings')>();
@@ -54,6 +62,7 @@ vi.mock('@/lib/appSettings', async (importOriginal) => {
 
 import { useAppSettings } from './useAppSettings';
 import { IncompleteRelayReadError } from '@/lib/relayQuery';
+import { resetSettingsSync } from '@/lib/settingsSync';
 import {
   SettingsUnreadableError,
   writeLocalCache,
@@ -73,6 +82,23 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
+/** A promise the test settles by hand, to hold a read or publish open. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+let publishedAt = 1000;
+/** What the publish hook resolves with: the signed event. */
+function signedEvent(): NostrEvent {
+  return { pubkey: currentUser.pubkey, created_at: ++publishedAt } as NostrEvent;
+}
+
 /** Let pending promises and effects settle. */
 async function flush() {
   await act(async () => {
@@ -82,23 +108,29 @@ async function flush() {
 
 beforeEach(() => {
   for (const k of KEYS) localStorage.removeItem(k);
-  vi.clearAllMocks();
+  vi.resetAllMocks();
+  resetSettingsSync();
+  currentUser = { pubkey: 'pk-self', method: 'extension', signer: {} };
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   queryForWrite.mockResolvedValue([]);
+  queryForDisplay.mockResolvedValue([]);
   resolveRemoteSettings.mockResolvedValue(null);
   encryptSettings.mockResolvedValue('ciphertext');
+  publish.mockImplementation(async () => signedEvent());
 });
 
 describe('useAppSettings — read, merge, then write', () => {
-  it('reads only through queryForWrite against the configured read relays', async () => {
+  it('shows settings through the tolerant read, against the configured read relays', async () => {
     renderHook(() => useAppSettings(), { wrapper });
-    await waitFor(() => expect(queryForWrite).toHaveBeenCalled());
-    expect(queryForWrite.mock.calls[0][1]).toEqual(['wss://a', 'wss://b', 'wss://c']);
+    await waitFor(() => expect(queryForDisplay).toHaveBeenCalled());
+    expect(queryForDisplay.mock.calls[0][1]).toEqual(['wss://a', 'wss://b', 'wss://c']);
+    expect(queryForWrite).not.toHaveBeenCalled();
     expect(nostr.query).not.toHaveBeenCalled();
   });
 
-  it('never seeds after a timed-out read', async () => {
+  it('never seeds when the display read saw nothing but the strict read times out', async () => {
     writeLocalCache('pk-self', { privacyDefault: true, celebratedMilestones: [7] });
+    // Too few relays answered: display shows "nothing seen", a write must not trust it.
     queryForWrite.mockRejectedValue(new IncompleteRelayReadError(1, 3));
     renderHook(() => useAppSettings(), { wrapper });
     await waitFor(() => expect(queryForWrite).toHaveBeenCalled());
@@ -107,12 +139,26 @@ describe('useAppSettings — read, merge, then write', () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
+  it('never seeds when no relay answered the display read at all', async () => {
+    writeLocalCache('pk-self', { privacyDefault: true, celebratedMilestones: [7] });
+    queryForDisplay.mockRejectedValue(new IncompleteRelayReadError(0, 3));
+    queryForWrite.mockRejectedValue(new IncompleteRelayReadError(0, 3));
+    const { result } = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(queryForDisplay).toHaveBeenCalled());
+    await flush();
+    expect(publish).not.toHaveBeenCalled();
+    // Local values still show.
+    expect(result.current.settings).toMatchObject({ privacyDefault: true, celebratedMilestones: [7] });
+  });
+
   it('never seeds after a failed decrypt of the newest event, even with a quorum', async () => {
     writeLocalCache('pk-self', { privacyDefault: true, celebratedMilestones: [7] });
+    queryForDisplay.mockResolvedValue([{ id: 'x' } as NostrEvent]);
     queryForWrite.mockResolvedValue([{ id: 'x' } as NostrEvent]);
     resolveRemoteSettings.mockRejectedValue(new SettingsUnreadableError());
     renderHook(() => useAppSettings(), { wrapper });
-    await waitFor(() => expect(resolveRemoteSettings).toHaveBeenCalled());
+    // Once for display (shows nothing remote), once for the strict seed read.
+    await waitFor(() => expect(resolveRemoteSettings).toHaveBeenCalledTimes(2));
     await flush();
     expect(publish).not.toHaveBeenCalled();
   });
@@ -121,8 +167,8 @@ describe('useAppSettings — read, merge, then write', () => {
     writeLocalCache('pk-self', { privacyDefault: true, celebratedMilestones: [7] });
     renderHook(() => useAppSettings(), { wrapper });
     await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
-    // Initial query + the fresh read inside the write.
-    expect(queryForWrite).toHaveBeenCalledTimes(2);
+    // The write did its own strict read (the display read alone never seeds).
+    expect(queryForWrite).toHaveBeenCalledTimes(1);
     expect(encryptSettings.mock.calls[0][2]).toMatchObject({ privacyDefault: true, celebratedMilestones: [7] });
   });
 
@@ -132,7 +178,7 @@ describe('useAppSettings — read, merge, then write', () => {
       .mockResolvedValueOnce(null)
       .mockResolvedValue({ privacyDefault: false, celebratedMilestones: [30] });
     renderHook(() => useAppSettings(), { wrapper });
-    await waitFor(() => expect(queryForWrite).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(queryForWrite).toHaveBeenCalledTimes(1));
     await flush();
     expect(publish).not.toHaveBeenCalled();
   });
@@ -226,7 +272,6 @@ describe('useAppSettings — a blocked privacy-default change is kept (Audit M1)
     const { result } = await blockedPrivateChoice();
     queryForWrite.mockResolvedValue([]);
     resolveRemoteSettings.mockResolvedValue({ privacyDefault: false, celebratedMilestones: [] });
-    publish.mockImplementation((_event, opts) => opts?.onSuccess?.());
     act(() => result.current.updateSettings({ celebratedMilestones: [7] }));
     await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
     expect(encryptSettings.mock.calls.at(-1)![2]).toMatchObject({
@@ -252,10 +297,247 @@ describe('useAppSettings — a blocked privacy-default change is kept (Audit M1)
     resolveRemoteSettings.mockResolvedValue({ privacyDefault: false, celebratedMilestones: [] });
     const { result } = renderHook(() => useAppSettings(), { wrapper });
     await waitFor(() => expect(result.current.isLoading).toBe(false));
-    publish.mockImplementation((_event, opts) => opts?.onError?.(new Error('no relay accepted')));
+    publish.mockRejectedValue(new Error('no relay accepted'));
     act(() => result.current.updateSettings({ privacyDefault: true }));
     await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(toast).toHaveBeenCalledTimes(1));
     expect(readPendingPrivacy('pk-self')).toBe(true);
-    expect(toast).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useAppSettings — display reads do not need a quorum', () => {
+  it('shows remote settings from a partial read while a write stays blocked', async () => {
+    // One relay of three answered: enough to show, not enough to write.
+    queryForDisplay.mockResolvedValue([{ id: 'x', created_at: 5 } as NostrEvent]);
+    resolveRemoteSettings.mockResolvedValue({ privacyDefault: true, celebratedMilestones: [7, 30] });
+    queryForWrite.mockRejectedValue(new IncompleteRelayReadError(1, 3));
+    const { result } = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() =>
+      expect(result.current.settings).toMatchObject({ privacyDefault: true, celebratedMilestones: [7, 30] })
+    );
+    act(() => result.current.updateSettings({ celebratedMilestones: [100] }));
+    await flush();
+    expect(publish).not.toHaveBeenCalled();
+    expect(result.current.settings.celebratedMilestones).toEqual([7, 30, 100]);
+  });
+
+  it('shows local values when the remote event cannot be decrypted', async () => {
+    writeLocalCache('pk-self', { privacyDefault: true, celebratedMilestones: [7] });
+    queryForDisplay.mockResolvedValue([{ id: 'x', created_at: 5 } as NostrEvent]);
+    queryForWrite.mockResolvedValue([{ id: 'x', created_at: 5 } as NostrEvent]);
+    resolveRemoteSettings.mockRejectedValue(new SettingsUnreadableError());
+    const { result } = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.settings).toMatchObject({ privacyDefault: true, celebratedMilestones: [7] });
+  });
+});
+
+describe('useAppSettings — writes from different components are serialized app-wide', () => {
+  const STALE_REMOTE: AppSettings = { privacyDefault: false, celebratedMilestones: [] };
+
+  /** Two mounted instances, as the day editor and the milestone dialog are. */
+  async function twoComponents() {
+    resolveRemoteSettings.mockResolvedValue(STALE_REMOTE);
+    const editor = renderHook(() => useAppSettings(), { wrapper });
+    const milestones = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(editor.result.current.isLoading).toBe(false));
+    await waitFor(() => expect(milestones.result.current.isLoading).toBe(false));
+    return { editor, milestones };
+  }
+
+  it('an overlapping milestone write does not revert a just-changed privacy default', async () => {
+    const { editor, milestones } = await twoComponents();
+    // Every strict read keeps returning the copy from before either write,
+    // as relays do when both reads start before the first publish lands (or
+    // when the relays that answer haven't stored it yet).
+    const firstPublish = deferred<NostrEvent>();
+    publish.mockImplementationOnce(() => firstPublish.promise);
+
+    // One save: the editor switches the default to Private, and the save
+    // reaches a streak milestone a moment later.
+    act(() => editor.result.current.updateSettings({ privacyDefault: true }));
+    act(() => milestones.result.current.updateSettings({ celebratedMilestones: [7] }));
+
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    await flush();
+    // The second write has not even read yet: it waits for the first publish.
+    expect(queryForWrite).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      firstPublish.resolve(signedEvent());
+    });
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(2));
+    await flush();
+
+    // The last event on relays carries both changes.
+    expect(encryptSettings.mock.calls.at(-1)![2]).toEqual({
+      privacyDefault: true,
+      celebratedMilestones: [7],
+      lastSeenNotifications: undefined,
+    });
+    // And the choice survives on this device, in both components.
+    expect(readLocalCache('pk-self')).toMatchObject({ privacyDefault: true, celebratedMilestones: [7] });
+    expect(readPendingPrivacy('pk-self')).toBeUndefined();
+    editor.rerender();
+    milestones.rerender();
+    expect(editor.result.current.settings.privacyDefault).toBe(true);
+    expect(milestones.result.current.settings.privacyDefault).toBe(true);
+  });
+
+  it('the privacy write publishing second does not drop the milestone', async () => {
+    const { editor, milestones } = await twoComponents();
+    act(() => milestones.result.current.updateSettings({ celebratedMilestones: [7] }));
+    act(() => editor.result.current.updateSettings({ privacyDefault: true }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(2));
+    await flush();
+    expect(encryptSettings.mock.calls.at(-1)![2]).toMatchObject({
+      privacyDefault: true,
+      celebratedMilestones: [7],
+    });
+  });
+
+  it('the latest of two quick privacy choices wins, even from a queued older write', async () => {
+    const { editor, milestones } = await twoComponents();
+    const firstRead = deferred<NostrEvent[]>();
+    queryForWrite.mockImplementationOnce(() => firstRead.promise);
+    act(() => editor.result.current.updateSettings({ privacyDefault: true }));
+    await flush();
+    // The user changes their mind before the first write has read the relays.
+    act(() => milestones.result.current.updateSettings({ privacyDefault: false }));
+    await act(async () => {
+      firstRead.resolve([]);
+    });
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(2));
+    await flush();
+    for (const call of encryptSettings.mock.calls) {
+      expect(call[2].privacyDefault).toBe(false);
+    }
+    expect(readLocalCache('pk-self').privacyDefault).toBe(false);
+  });
+
+  it('a failed write does not block the next one', async () => {
+    const { editor, milestones } = await twoComponents();
+    publish.mockRejectedValueOnce(new Error('no relay accepted'));
+    act(() => editor.result.current.updateSettings({ privacyDefault: true }));
+    act(() => milestones.result.current.updateSettings({ celebratedMilestones: [7] }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(2));
+    await flush();
+    expect(encryptSettings.mock.calls.at(-1)![2]).toMatchObject({
+      privacyDefault: true,
+      celebratedMilestones: [7],
+    });
+    expect(readPendingPrivacy('pk-self')).toBeUndefined();
+  });
+});
+
+describe('useAppSettings — an account switch during a write', () => {
+  const SELF_REMOTE: AppSettings = { privacyDefault: false, celebratedMilestones: [] };
+
+  beforeEach(() => {
+    // pk-self has remote settings; pk-other has none anywhere.
+    resolveRemoteSettings.mockImplementation(async (...args: unknown[]) =>
+      args[1] === 'pk-self' ? SELF_REMOTE : null
+    );
+  });
+
+  function switchAccount(view: { rerender: () => void }) {
+    currentUser = { pubkey: 'pk-other', method: 'extension', signer: {} };
+    view.rerender();
+  }
+
+  function expectOtherAccountUntouched(view: { result: { current: { settings: AppSettings } } }) {
+    expect(readLocalCache('pk-other')).toEqual({
+      privacyDefault: undefined,
+      celebratedMilestones: [],
+      lastSeenNotifications: undefined,
+    });
+    expect(readPendingPrivacy('pk-other')).toBeUndefined();
+    expect(client.getQueryData(['app-settings', 'pk-other']) ?? null).toBeNull();
+    expect(view.result.current.settings).toEqual({
+      privacyDefault: undefined,
+      celebratedMilestones: [],
+      lastSeenNotifications: undefined,
+    });
+  }
+
+  it('while the write is reading relays: nothing reaches the new account, nothing is published', async () => {
+    const view = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(view.result.current.isLoading).toBe(false));
+    const read = deferred<NostrEvent[]>();
+    queryForWrite.mockImplementationOnce(() => read.promise);
+    act(() =>
+      view.result.current.updateSettings({
+        privacyDefault: true,
+        celebratedMilestones: [7, 30],
+        lastSeenNotifications: 500,
+      })
+    );
+    await flush();
+
+    switchAccount(view);
+    await waitFor(() => expect(view.result.current.isLoading).toBe(false));
+    await act(async () => {
+      read.resolve([]);
+    });
+    await flush();
+    view.rerender();
+
+    // Nothing was signed or published as the new account.
+    expect(encryptSettings).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(toast).not.toHaveBeenCalled();
+    expectOtherAccountUntouched(view);
+    // The first account keeps its change, still marked for its next write.
+    expect(readLocalCache('pk-self')).toEqual({
+      privacyDefault: true,
+      celebratedMilestones: [7, 30],
+      lastSeenNotifications: 500,
+    });
+    expect(readPendingPrivacy('pk-self')).toBe(true);
+  });
+
+  it('while the write is encrypting: it is not published under the new account', async () => {
+    const view = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(view.result.current.isLoading).toBe(false));
+    const encryption = deferred<string>();
+    encryptSettings.mockImplementationOnce(() => encryption.promise);
+    act(() => view.result.current.updateSettings({ privacyDefault: true, celebratedMilestones: [7] }));
+    await waitFor(() => expect(encryptSettings).toHaveBeenCalledTimes(1));
+
+    switchAccount(view);
+    await waitFor(() => expect(view.result.current.isLoading).toBe(false));
+    await act(async () => {
+      encryption.resolve('ciphertext-for-pk-self');
+    });
+    await flush();
+    view.rerender();
+
+    expect(publish).not.toHaveBeenCalled();
+    expectOtherAccountUntouched(view);
+    expect(readPendingPrivacy('pk-self')).toBe(true);
+  });
+
+  it("the new account's own writes are not held up by the old account's write", async () => {
+    const view = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(view.result.current.isLoading).toBe(false));
+    const read = deferred<NostrEvent[]>();
+    queryForWrite.mockImplementationOnce(() => read.promise);
+    act(() => view.result.current.updateSettings({ celebratedMilestones: [7] }));
+    await flush();
+
+    switchAccount(view);
+    await waitFor(() => expect(view.result.current.isLoading).toBe(false));
+    act(() => view.result.current.updateSettings({ celebratedMilestones: [14] }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    expect(encryptSettings.mock.calls[0][1]).toBe('pk-other');
+    expect(encryptSettings.mock.calls[0][2].celebratedMilestones).toEqual([14]);
+
+    await act(async () => {
+      read.resolve([]);
+    });
+    await flush();
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(readLocalCache('pk-other').celebratedMilestones).toEqual([14]);
+    expect(readLocalCache('pk-self').celebratedMilestones).toEqual([7]);
   });
 });

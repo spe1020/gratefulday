@@ -18,6 +18,19 @@
  * `wss://relay.nostr.band` from the default list never answers). A majority
  * still rules out the failure this guards against: a slow network or a stalled
  * read returning an empty, partial result.
+ *
+ * Availability trade-off (accepted on purpose): a write is refused whenever
+ * fewer than a strict majority of the user's read relays answer in time. A
+ * relay that is down, too slow, or demands auth counts as unanswered, so a
+ * user whose read list is half or more unreliable relays (1 dead of 2, 2 of
+ * 4, ...) cannot save entries or sync settings until they fix the list or
+ * the relays recover. Nothing is lost when that happens: the editor keeps
+ * the writing, settings stay in the local cache, and the user is told. We
+ * prefer a blocked save to silently replacing reflections or privacy
+ * settings this device could not see.
+ *
+ * Reads that only decide what to *show* must not be this strict: use
+ * `queryForDisplay`, which returns whatever arrived.
  */
 
 import type { NostrEvent, NostrFilter, NostrRelayCLOSED, NostrRelayEOSE, NostrRelayEVENT } from '@nostrify/nostrify';
@@ -57,16 +70,30 @@ export function hasReadQuorum(answered: number, total: number): boolean {
   return total > 0 && answered * 2 > total;
 }
 
-export async function queryForWrite(
+interface RelayReadResult {
+  events: NostrEvent[];
+  /** Relays that sent EOSE before the read ended. */
+  answered: number;
+  /** Configured, de-duplicated relays asked. */
+  total: number;
+  /** The caller's signal aborted the read. */
+  aborted: boolean;
+}
+
+/**
+ * Ask each relay separately and count the ones that finished. Never throws:
+ * the two public readers below decide what an incomplete read means.
+ */
+async function readRelays(
   client: RelayReqClient,
   relays: string[],
   filters: NostrFilter[],
   { timeoutMs, graceMs = 750, signal }: QueryForWriteOptions
-): Promise<NostrEvent[]> {
+): Promise<RelayReadResult> {
   const urls = [...new Set(relays)];
-  if (urls.length === 0) throw new IncompleteRelayReadError(0, 0);
+  if (urls.length === 0) return { events: [], answered: 0, total: 0, aborted: false };
 
-  if (signal?.aborted) throw new IncompleteRelayReadError(0, urls.length);
+  if (signal?.aborted) return { events: [], answered: 0, total: urls.length, aborted: true };
 
   const controller = new AbortController();
   let release!: () => void;
@@ -122,11 +149,52 @@ export async function queryForWrite(
     await Promise.allSettled(perRelay);
   }
 
-  if (signal?.aborted) throw new IncompleteRelayReadError(answered, urls.length);
-  if (!hasReadQuorum(answered, urls.length)) {
-    throw new IncompleteRelayReadError(answered, urls.length);
+  return {
+    events: [...events.values()],
+    answered,
+    total: urls.length,
+    aborted: signal?.aborted ?? false,
+  };
+}
+
+/**
+ * Strict read for a result that is about to decide a write. Throws
+ * `IncompleteRelayReadError` unless a strict majority of the relays answered
+ * before the timeout (an external abort also throws).
+ */
+export async function queryForWrite(
+  client: RelayReqClient,
+  relays: string[],
+  filters: NostrFilter[],
+  options: QueryForWriteOptions
+): Promise<NostrEvent[]> {
+  const { events, answered, total, aborted } = await readRelays(client, relays, filters, options);
+  if (aborted || !hasReadQuorum(answered, total)) {
+    throw new IncompleteRelayReadError(answered, total);
   }
-  return [...events.values()];
+  return events;
+}
+
+/**
+ * Tolerant read for display only. Returns whatever the relays sent before
+ * the timeout, quorum or not. It still returns early (majority + grace) so
+ * one dead relay doesn't slow every load. An empty result means "nothing
+ * seen", NOT "nothing exists": never decide a write from it.
+ *
+ * It throws `IncompleteRelayReadError` only when not a single relay answered
+ * and nothing arrived, so the caller can retry instead of caching "empty".
+ */
+export async function queryForDisplay(
+  client: RelayReqClient,
+  relays: string[],
+  filters: NostrFilter[],
+  options: QueryForWriteOptions
+): Promise<NostrEvent[]> {
+  const { events, answered, total, aborted } = await readRelays(client, relays, filters, options);
+  if (!aborted && answered === 0 && events.length === 0) {
+    throw new IncompleteRelayReadError(0, total);
+  }
+  return events;
 }
 
 /** Read relays from the app's relay config (mirrors NostrProvider's reqRouter). */

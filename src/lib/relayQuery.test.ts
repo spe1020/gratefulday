@@ -3,6 +3,7 @@ import type { NostrEvent, NostrFilter } from '@nostrify/nostrify';
 import {
   IncompleteRelayReadError,
   hasReadQuorum,
+  queryForDisplay,
   queryForWrite,
   readRelayUrls,
   type RelayReqClient,
@@ -213,6 +214,47 @@ describe('queryForWrite', () => {
       graceMs: 500,
     });
     expect(events.map((e) => e.id)).toEqual(['newest']);
+  });
+});
+
+describe('queryForDisplay', () => {
+  it('returns what arrived when fewer than a majority answered', async () => {
+    const { client } = fakeClient({
+      'wss://a': { kind: 'eose', events: [ev('1')] },
+      'wss://b': { kind: 'hang' },
+      'wss://c': { kind: 'closed' },
+      'wss://d': { kind: 'error' },
+      'wss://e': { kind: 'hang' },
+    });
+    const events = await queryForDisplay(client, FIVE, FILTERS, { timeoutMs: 50 });
+    expect(events.map((e) => e.id)).toEqual(['1']);
+    // The same relays refuse a write.
+    await expect(queryForWrite(client, FIVE, FILTERS, { timeoutMs: 50 })).rejects.toBeInstanceOf(
+      IncompleteRelayReadError
+    );
+  });
+
+  it('keeps events from a relay that never sent EOSE', async () => {
+    const { client } = fakeClient({
+      'wss://a': { kind: 'hang', events: [ev('1')] },
+      'wss://b': { kind: 'hang' },
+    });
+    const events = await queryForDisplay(client, ['wss://a', 'wss://b'], FILTERS, { timeoutMs: 50 });
+    expect(events.map((e) => e.id)).toEqual(['1']);
+  });
+
+  it('returns an empty list when a relay answered with nothing', async () => {
+    const { client } = fakeClient({ 'wss://a': { kind: 'eose' }, 'wss://b': { kind: 'hang' } });
+    await expect(
+      queryForDisplay(client, ['wss://a', 'wss://b'], FILTERS, { timeoutMs: 50 })
+    ).resolves.toEqual([]);
+  });
+
+  it('throws when no relay answered at all, so the caller can retry', async () => {
+    const { client } = fakeClient({ 'wss://a': { kind: 'hang' }, 'wss://b': { kind: 'error' } });
+    await expect(
+      queryForDisplay(client, ['wss://a', 'wss://b'], FILTERS, { timeoutMs: 50 })
+    ).rejects.toBeInstanceOf(IncompleteRelayReadError);
   });
 });
 

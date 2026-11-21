@@ -8,7 +8,14 @@ import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useNip44Support, cacheNip44Support } from '@/hooks/useNip44Support';
 import { useToast } from '@/hooks/useToast';
 import { Nip44UnsupportedError } from '@/lib/privacyUtils';
-import { queryForWrite, readRelayUrls } from '@/lib/relayQuery';
+import { queryForDisplay, queryForWrite, readRelayUrls } from '@/lib/relayQuery';
+import {
+  clearPrivacyUnsyncedNotice,
+  enqueueSettingsWrite,
+  newestKnownRemote,
+  recordPublishedSettings,
+  shouldNotifyPrivacyUnsynced,
+} from '@/lib/settingsSync';
 import {
   SETTINGS_KIND,
   SETTINGS_D_TAG,
@@ -20,6 +27,7 @@ import {
   encryptSettings,
   mergeForWrite,
   needsSeed,
+  pickLatestEvent,
   readLocalCache,
   readPendingPrivacy,
   reconcile,
@@ -74,13 +82,20 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  * and merges against it. If that read times out (fewer than a majority of read
  * relays answered) or the remote event can't be decrypted, the remote state is
  * unknown and nothing is published; the change stays in the local cache.
+ * Writes are queued app-wide per account (see `settingsSync`).
+ *
+ * Showing settings is deliberately less strict than writing them: the display
+ * read uses whatever relays answered, so a poor relay list degrades to "local
+ * values plus what we could fetch" instead of hiding synced settings.
  */
 export function useAppSettings(): UseAppSettingsResult {
   const { user } = useCurrentUser();
   const { nostr } = useNostr();
   const { config } = useAppContext();
   const { supported } = useNip44Support();
-  const { mutate: publish } = useNostrPublish();
+  // mutateAsync, not mutate: the write queue has to wait for the publish to
+  // settle, and per-call mutate callbacks are dropped if the component unmounts.
+  const { mutateAsync: publish } = useNostrPublish();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -94,31 +109,61 @@ export function useAppSettings(): UseAppSettingsResult {
     setLocalCache(pubkey ? readLocalCache(pubkey) : emptySettings());
   }, [pubkey]);
 
+  // The account this instance is rendering for right now. An async write
+  // started under one account checks it before signing or notifying, so it
+  // can never act as (or speak to) the account the user switched to.
+  const activePubkeyRef = useRef(pubkey);
+  activePubkeyRef.current = pubkey;
+
   const readRelays = useMemo(
     () => readRelayUrls(config.relayMetadata.relays),
     [config.relayMetadata.relays]
   );
 
+  const settingsFilter = useMemo(
+    () => (pubkey ? [{ kinds: [SETTINGS_KIND], authors: [pubkey], '#d': [SETTINGS_D_TAG], limit: 20 }] : []),
+    [pubkey]
+  );
+
   /**
-   * Fetch the remote settings. Resolves `null` only when a majority of read
-   * relays answered and none holds an event; throws on a timeout or a
-   * decrypt failure so neither can be mistaken for "no settings".
+   * Strict read, used only to protect a write. Resolves `null` only when a
+   * majority of read relays answered and none holds an event; throws on a
+   * timeout or a decrypt failure so neither can be mistaken for "no settings".
    */
-  const fetchRemoteSettings = useCallback(
+  const fetchRemoteForWrite = useCallback(async (): Promise<AppSettings | null> => {
+    if (!pubkey || !user) return null;
+    const events = await queryForWrite(nostr, readRelays, settingsFilter, {
+      timeoutMs: SETTINGS_READ_TIMEOUT_MS,
+    });
+    const fetched = await resolveRemoteSettings(user.signer, pubkey, events);
+    // A successful decrypt is the definitive bunker capability signal.
+    if (fetched && user.method === 'bunker') cacheNip44Support(pubkey, true);
+    return newestKnownRemote(pubkey, fetched, pickLatestEvent(events)?.created_at);
+  }, [nostr, readRelays, settingsFilter, pubkey, user]);
+
+  /**
+   * Tolerant read, used only to show settings. It takes whatever the relays
+   * sent, with or without a quorum, and an event that can't be decrypted
+   * simply shows nothing remote. Its `null` means "nothing seen", so it must
+   * never decide a write: every write does its own strict read first.
+   */
+  const fetchRemoteForDisplay = useCallback(
     async (signal?: AbortSignal): Promise<AppSettings | null> => {
       if (!pubkey || !user) return null;
-      const events = await queryForWrite(
-        nostr,
-        readRelays,
-        [{ kinds: [SETTINGS_KIND], authors: [pubkey], '#d': [SETTINGS_D_TAG], limit: 20 }],
-        { timeoutMs: SETTINGS_READ_TIMEOUT_MS, signal }
-      );
-      const settings = await resolveRemoteSettings(user.signer, pubkey, events);
-      // A successful decrypt is the definitive bunker capability signal.
-      if (settings && user.method === 'bunker') cacheNip44Support(pubkey, true);
-      return settings;
+      const events = await queryForDisplay(nostr, readRelays, settingsFilter, {
+        timeoutMs: SETTINGS_READ_TIMEOUT_MS,
+        signal,
+      });
+      let fetched: AppSettings | null = null;
+      try {
+        fetched = await resolveRemoteSettings(user.signer, pubkey, events);
+      } catch {
+        fetched = null;
+      }
+      if (fetched && user.method === 'bunker') cacheNip44Support(pubkey, true);
+      return newestKnownRemote(pubkey, fetched, pickLatestEvent(events)?.created_at);
     },
-    [nostr, readRelays, pubkey, user]
+    [nostr, readRelays, settingsFilter, pubkey, user]
   );
 
   const remoteQuery = useQuery({
@@ -126,7 +171,7 @@ export function useAppSettings(): UseAppSettingsResult {
     // Skip entirely when we know encryption is unavailable — localStorage only.
     enabled: !!pubkey && supported !== false,
     staleTime: 5 * 60 * 1000,
-    queryFn: (c) => fetchRemoteSettings(c.signal),
+    queryFn: (c) => fetchRemoteForDisplay(c.signal),
   });
 
   const remote = remoteQuery.data ?? null;
@@ -137,17 +182,14 @@ export function useAppSettings(): UseAppSettingsResult {
     [localCache, remote, pubkey]
   );
 
-  // Writes run one at a time, so a slower read for an earlier change can't
-  // publish after (and so replace) a later one.
-  const writeChainRef = useRef<Promise<void>>(Promise.resolve());
-
   // A blocked write that carried an unsynced privacy choice is made visible
-  // once per choice (not on every later blocked retry).
-  const notifiedPendingRef = useRef<boolean | undefined>(undefined);
+  // once per choice (not on every later blocked retry, and not once per
+  // component). Never shown after the user switched to another account.
   const notifyPrivacyUnsynced = useCallback(
-    (value: boolean | undefined) => {
-      if (value === undefined || notifiedPendingRef.current === value) return;
-      notifiedPendingRef.current = value;
+    (forPubkey: string) => {
+      if (activePubkeyRef.current !== forPubkey) return;
+      const value = readPendingPrivacy(forPubkey);
+      if (value === undefined || !shouldNotifyPrivacyUnsynced(forPubkey, value)) return;
       toast({
         title: 'Privacy default saved on this device',
         description:
@@ -157,44 +199,55 @@ export function useAppSettings(): UseAppSettingsResult {
     [toast]
   );
 
+  /**
+   * One read → merge → write. `pubkey`, `user` and its signer are the ones
+   * this write was started under; everything it stores is keyed by that
+   * pubkey (localStorage maps and the query key), so finishing after an
+   * account switch still only touches its own account.
+   */
   const writeSettings = useCallback(
-    async (local: AppSettings, patch: Partial<AppSettings>, seedOnly: boolean) => {
+    async (patch: Partial<AppSettings>, seedOnly: boolean) => {
       if (!user || !pubkey || supported === false) return; // localStorage-only
+      const sameAccount = () => activePubkeyRef.current === pubkey;
       try {
         // Read: never write against a remote we couldn't read. A timeout or a
         // decrypt failure throws here and skips the publish entirely.
-        const remote = await fetchRemoteSettings();
+        const remote = await fetchRemoteForWrite();
         // The seed exists only to create a missing event; if one exists now,
         // let the query pick it up instead.
         if (seedOnly && remote) {
           queryClient.setQueryData(['app-settings', pubkey], remote);
           return;
         }
-        // Merge. An unsynced privacy choice from an earlier blocked write rides
-        // along as part of the patch, so it beats the remote value.
-        const pendingPrivacy = readPendingPrivacy(pubkey);
-        const next = mergeForWrite(local, remote, {
+        // Merge against the local state as it is NOW, not as it was when this
+        // write was queued: another component may have changed it since. The
+        // user's latest unsynced privacy choice outranks both the remote value
+        // and an older queued patch.
+        const next = mergeForWrite(readLocalCache(pubkey), remote, {
           ...patch,
-          privacyDefault: patch.privacyDefault ?? pendingPrivacy,
+          privacyDefault: readPendingPrivacy(pubkey) ?? patch.privacyDefault,
         });
         writeLocalCache(pubkey, next);
-        setLocalCache(next);
+        queryClient.setQueryData(['app-settings', pubkey], next);
+        // The publish hook signs as whoever is logged in when it runs. After
+        // an account switch that is someone else: stop here. The change is
+        // safe in this account's cache and goes out with its next write.
+        if (!sameAccount()) return;
         // Write.
         const ciphertext = await withTimeout(
           encryptSettings(user.signer, pubkey, next),
           ENCRYPT_TIMEOUT_MS
         );
         if (user.method === 'bunker') cacheNip44Support(pubkey, true);
-        publish(buildSettingsEvent(ciphertext), {
-          onSuccess: () => {
-            clearPendingPrivacy(pubkey, next.privacyDefault);
-            notifiedPendingRef.current = undefined;
-            queryClient.invalidateQueries({ queryKey: ['app-settings', pubkey] });
-          },
-          onError: () => notifyPrivacyUnsynced(readPendingPrivacy(pubkey)),
-        });
+        if (!sameAccount()) return;
+        const event = await publish(buildSettingsEvent(ciphertext));
+        if (event.pubkey !== pubkey) return;
+        recordPublishedSettings(pubkey, next, event.created_at);
+        clearPendingPrivacy(pubkey, next.privacyDefault);
+        clearPrivacyUnsyncedNotice(pubkey);
+        queryClient.invalidateQueries({ queryKey: ['app-settings', pubkey] });
       } catch (error) {
-        notifyPrivacyUnsynced(readPendingPrivacy(pubkey));
+        notifyPrivacyUnsynced(pubkey);
         // Fail-soft: the cache already holds the change, so nothing is lost
         // and nothing scary is surfaced; the next successful write carries it.
         // A privacyDefault change also stays marked pending, so it keeps
@@ -205,17 +258,19 @@ export function useAppSettings(): UseAppSettingsResult {
         }
       }
     },
-    [user, pubkey, supported, publish, queryClient, fetchRemoteSettings, notifyPrivacyUnsynced]
+    [user, pubkey, supported, publish, queryClient, fetchRemoteForWrite, notifyPrivacyUnsynced]
   );
 
+  // Writes for one account run one at a time across the whole app (every
+  // component using this hook shares the queue), and each waits for the one
+  // before it to finish publishing. So a write always reads what the previous
+  // one wrote, and an earlier change can't publish after a later one.
   const publishSettings = useCallback(
-    (local: AppSettings, patch: Partial<AppSettings>, seedOnly = false) => {
-      writeChainRef.current = writeChainRef.current.then(() =>
-        writeSettings(local, patch, seedOnly)
-      );
-      return writeChainRef.current;
+    (patch: Partial<AppSettings>, seedOnly = false) => {
+      if (!pubkey) return Promise.resolve();
+      return enqueueSettingsWrite(pubkey, () => writeSettings(patch, seedOnly));
     },
-    [writeSettings]
+    [pubkey, writeSettings]
   );
 
   const updateSettings = useCallback(
@@ -238,15 +293,16 @@ export function useAppSettings(): UseAppSettingsResult {
       // publishing fails or we're offline, the UI would never reflect the
       // write even though it's safely cached. This keeps the hook fail-soft.
       queryClient.setQueryData(['app-settings', pubkey], next);
-      void publishSettings(next, patch);
+      void publishSettings(patch);
     },
     [pubkey, settings, publishSettings, queryClient]
   );
 
   // Migration: seed the relay event once from existing local values when no
-  // remote event exists yet (and encryption is available). Only a successful
-  // read that found nothing counts as "no remote event" — a timed-out or
-  // undecryptable read is an error, and never seeds.
+  // remote event exists yet (and encryption is available). The display read
+  // finding nothing only *suggests* that; the seed write does its own strict
+  // read and publishes only if a majority of relays confirm there is no event
+  // (a timed-out or undecryptable read never seeds).
   const seededFor = useRef<string | null>(null);
   useEffect(() => {
     if (!pubkey || supported === false) return;
@@ -255,7 +311,7 @@ export function useAppSettings(): UseAppSettingsResult {
     if (seededFor.current === pubkey) return;
     if (!needsSeed(false, localCache)) return;
     seededFor.current = pubkey;
-    void publishSettings(localCache, {}, true);
+    void publishSettings({}, true);
   }, [
     pubkey,
     supported,
