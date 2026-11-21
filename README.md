@@ -143,7 +143,7 @@ This is an open-source project built on Nostr. Contributions are welcome!
 
 ## License
 
-MIT License - see LICENSE file for details
+MIT License - see [LICENSE](LICENSE) for details
 
 ## Acknowledgments
 
