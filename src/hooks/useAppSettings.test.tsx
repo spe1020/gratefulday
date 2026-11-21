@@ -68,6 +68,8 @@ import {
   writeLocalCache,
   readLocalCache,
   readPendingPrivacy,
+  readKnownSettingsAt,
+  noteKnownSettingsAt,
 } from '@/lib/appSettings';
 
 const KEYS = [
@@ -75,6 +77,7 @@ const KEYS = [
   'gratefulday:last-seen-notifications:v1',
   'gratefulday:milestones:v1',
   'gratefulday:privacy-default-pending:v1',
+  'gratefulday:settings-known-at:v1',
 ];
 
 let client: QueryClient;
@@ -97,6 +100,22 @@ let publishedAt = 1000;
 /** What the publish hook resolves with: the signed event. */
 function signedEvent(): NostrEvent {
   return { pubkey: currentUser.pubkey, created_at: ++publishedAt } as NostrEvent;
+}
+
+/**
+ * A settings event as relays would return it. The (mocked) decrypt step reads
+ * the settings straight off it, so tests can script which copy each read sees.
+ */
+function remoteEvent(created_at: number, settings: AppSettings): NostrEvent {
+  return { id: `ev-${created_at}`, created_at, settings } as unknown as NostrEvent;
+}
+/** Make the decrypt step return the settings of the newest event read. */
+function decryptFromEvents() {
+  resolveRemoteSettings.mockImplementation(async (...args: unknown[]) => {
+    const events = args[2] as (NostrEvent & { settings?: AppSettings })[];
+    const latest = [...events].sort((a, b) => b.created_at - a.created_at)[0];
+    return latest?.settings ?? null;
+  });
 }
 
 /** Let pending promises and effects settle. */
@@ -539,5 +558,145 @@ describe('useAppSettings — an account switch during a write', () => {
     expect(publish).toHaveBeenCalledTimes(1);
     expect(readLocalCache('pk-other').celebratedMilestones).toEqual([14]);
     expect(readLocalCache('pk-self').celebratedMilestones).toEqual([7]);
+  });
+});
+
+describe('useAppSettings — an older copy from a lagging relay cannot revert the privacy default', () => {
+  const OLD = remoteEvent(100, { privacyDefault: false, celebratedMilestones: [] });
+
+  beforeEach(() => decryptFromEvents());
+
+  it('a display read answered only by a stale relay does not flip the default, and a save does not publish it', async () => {
+    // This device already applied/published a newer event choosing Private.
+    writeLocalCache('pk-self', { privacyDefault: true, celebratedMilestones: [] });
+    noteKnownSettingsAt('pk-self', 200);
+    queryForDisplay.mockResolvedValue([OLD]);
+    const { result } = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    await flush();
+    expect(result.current.settings.privacyDefault).toBe(true);
+    expect(readLocalCache('pk-self').privacyDefault).toBe(true);
+
+    // An entry save re-sends the default the editor showed. The strict read
+    // also only reaches relays with the older copy.
+    queryForWrite.mockResolvedValue([OLD]);
+    act(() => result.current.updateSettings({ privacyDefault: result.current.settings.privacyDefault }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    expect(encryptSettings.mock.calls.at(-1)![2].privacyDefault).toBe(true);
+    expect(readLocalCache('pk-self').privacyDefault).toBe(true);
+  });
+
+  it('after our publish reached only some relays, a later milestone write does not bring the old default back', async () => {
+    queryForDisplay.mockResolvedValue([OLD]);
+    queryForWrite.mockResolvedValue([OLD]);
+    const editor = renderHook(() => useAppSettings(), { wrapper });
+    const milestones = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(editor.result.current.isLoading).toBe(false));
+
+    // W1: the user chooses Private. One relay accepts it.
+    const published: NostrEvent[] = [];
+    publish.mockImplementation(async (template: { created_at: number }) => {
+      const event = remoteEvent(template.created_at, encryptSettings.mock.calls.at(-1)![2]);
+      published.push(event);
+      return { ...event, pubkey: 'pk-self' };
+    });
+    // The display refetch after it is answered by that one relay (our own event).
+    queryForDisplay.mockImplementation(async () => (published.length ? [published.at(-1)!] : [OLD]));
+    act(() => editor.result.current.updateSettings({ privacyDefault: true }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(readPendingPrivacy('pk-self')).toBeUndefined();
+
+    // W2: a milestone write whose strict read reaches only the lagging majority.
+    act(() => milestones.result.current.updateSettings({ celebratedMilestones: [7] }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(2));
+    await flush();
+    expect(encryptSettings.mock.calls.at(-1)![2]).toMatchObject({
+      privacyDefault: true,
+      celebratedMilestones: [7],
+    });
+    expect(readLocalCache('pk-self').privacyDefault).toBe(true);
+  });
+
+  it('the protection survives a reload (it is persisted, not in memory)', async () => {
+    queryForDisplay.mockResolvedValue([OLD]);
+    queryForWrite.mockResolvedValue([OLD]);
+    const first = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(first.result.current.isLoading).toBe(false));
+    act(() => first.result.current.updateSettings({ privacyDefault: true }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    await flush();
+    first.unmount();
+
+    // Reload: all in-memory state is gone; relays still answer with the old copy.
+    resetSettingsSync();
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const second = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(second.result.current.isLoading).toBe(false));
+    await flush();
+    expect(second.result.current.settings.privacyDefault).toBe(true);
+    act(() => second.result.current.updateSettings({ celebratedMilestones: [7] }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(2));
+    expect(encryptSettings.mock.calls.at(-1)![2].privacyDefault).toBe(true);
+  });
+
+  it("a newer event from another device IS applied, and then protected too", async () => {
+    writeLocalCache('pk-self', { privacyDefault: true, celebratedMilestones: [] });
+    noteKnownSettingsAt('pk-self', 200);
+    const NEWER = remoteEvent(300, { privacyDefault: false, celebratedMilestones: [30] });
+    queryForDisplay.mockResolvedValue([OLD, NEWER]);
+    const { result } = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(result.current.settings.privacyDefault).toBe(false));
+    expect(result.current.settings.celebratedMilestones).toEqual([30]);
+    expect(readLocalCache('pk-self').privacyDefault).toBe(false);
+    expect(readKnownSettingsAt('pk-self')).toBe(300);
+  });
+
+  it('each settings event is stamped after the newest one this device knows of', async () => {
+    const future = Math.floor(Date.now() / 1000) + 3600;
+    noteKnownSettingsAt('pk-self', future);
+    const { result } = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    act(() => result.current.updateSettings({ celebratedMilestones: [7] }));
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    expect(publish.mock.calls[0][0].created_at).toBe(future + 1);
+  });
+});
+
+describe('useAppSettings — components share one view of local settings', () => {
+  it("another component keeps showing a change whose write is blocked, even after a refetch of the older remote", async () => {
+    resolveRemoteSettings.mockResolvedValue({ celebratedMilestones: [7], lastSeenNotifications: 100 });
+    const a = renderHook(() => useAppSettings(), { wrapper });
+    const b = renderHook(() => useAppSettings(), { wrapper });
+    await waitFor(() => expect(b.result.current.isLoading).toBe(false));
+    queryForWrite.mockRejectedValue(new IncompleteRelayReadError(1, 3));
+    act(() => a.result.current.updateSettings({ lastSeenNotifications: 900, celebratedMilestones: [30] }));
+    await flush();
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ['app-settings', 'pk-self'] });
+    });
+    expect(b.result.current.settings).toMatchObject({
+      celebratedMilestones: [7, 30],
+      lastSeenNotifications: 900,
+    });
+  });
+
+  it('the first render after an account switch already shows the new account, not the old one', async () => {
+    writeLocalCache('pk-self', { privacyDefault: true, celebratedMilestones: [7, 30] });
+    const seen: AppSettings[] = [];
+    const view = renderHook(() => {
+      const value = useAppSettings();
+      seen.push(value.settings);
+      return value;
+    }, { wrapper });
+    await waitFor(() => expect(view.result.current.isLoading).toBe(false));
+    seen.length = 0;
+    currentUser = { pubkey: 'pk-other', method: 'extension', signer: {} };
+    view.rerender();
+    expect(seen.length).toBeGreaterThan(0);
+    for (const s of seen) {
+      expect(s.privacyDefault).toBeUndefined();
+      expect(s.celebratedMilestones).toEqual([]);
+    }
   });
 });

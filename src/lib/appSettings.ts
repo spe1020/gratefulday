@@ -331,3 +331,73 @@ export function clearPendingPrivacy(pubkey: string, published: boolean | undefin
 export function withPendingPrivacy(settings: AppSettings, pending: boolean | undefined): AppSettings {
   return pending === undefined ? settings : { ...settings, privacyDefault: pending };
 }
+
+// --- Newest settings event this device knows of -----------------------------
+// Relays don't all hold the same copy: a publish can reach only some of them,
+// and a read is answered by whichever relays respond. So a read can return an
+// event OLDER than one this device already published or applied. For the two
+// monotonic fields that's harmless (union/max). For `privacyDefault` it is
+// not: the older value would win the reconcile and the next write would
+// publish it, silently reverting the user's choice.
+//
+// We persist the `created_at` of the newest settings event this device has
+// published or applied. The local cache holds `privacyDefault` as of that
+// event, so when relays return something older, the local value stands.
+
+const KNOWN_AT_KEY = 'gratefulday:settings-known-at:v1';
+
+/** `created_at` of the newest settings event this device published or applied (0: none). */
+export function readKnownSettingsAt(pubkey: string): number {
+  const value = readMap<number>(KNOWN_AT_KEY)[pubkey];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/** Record a settings event this device published or applied. Never moves backwards. */
+export function noteKnownSettingsAt(pubkey: string, createdAt: number): void {
+  if (!(createdAt > readKnownSettingsAt(pubkey))) return;
+  const map = readMap<number>(KNOWN_AT_KEY);
+  map[pubkey] = createdAt;
+  writeMap(KNOWN_AT_KEY, map);
+}
+
+/**
+ * Turn what a relay read returned into the remote state to reconcile with.
+ *
+ * - Older than what this device already knows: a stale copy. Keep its
+ *   monotonic fields (they only ever add), but `privacyDefault` comes from
+ *   the local cache, which reflects the newer event.
+ * - Newer: apply it. Remember its timestamp and, unless an unsynced local
+ *   choice is pending, store its `privacyDefault` locally so a later stale
+ *   read can't undo it.
+ */
+export function resolveAgainstKnown(
+  pubkey: string,
+  fetched: AppSettings | null,
+  fetchedCreatedAt: number | undefined
+): AppSettings | null {
+  if (!fetched) return null;
+  const at = fetchedCreatedAt ?? 0;
+  const known = readKnownSettingsAt(pubkey);
+  if (at < known) {
+    const localPrivacy = readLocalCache(pubkey).privacyDefault;
+    return { ...fetched, privacyDefault: localPrivacy ?? fetched.privacyDefault };
+  }
+  if (at > known) {
+    noteKnownSettingsAt(pubkey, at);
+    if (fetched.privacyDefault !== undefined && readPendingPrivacy(pubkey) === undefined) {
+      const privacyMap = readMap<boolean>(PRIVACY_DEFAULT_KEY);
+      privacyMap[pubkey] = fetched.privacyDefault;
+      writeMap(PRIVACY_DEFAULT_KEY, privacyMap);
+    }
+  }
+  return fetched;
+}
+
+/**
+ * `created_at` for the next settings event: now, but always after the newest
+ * event this device knows of. Two writes in the same second would otherwise
+ * tie, and relays keep only one of a tie.
+ */
+export function nextSettingsCreatedAt(pubkey: string, nowSeconds = Math.floor(Date.now() / 1000)): number {
+  return Math.max(nowSeconds, readKnownSettingsAt(pubkey) + 1);
+}

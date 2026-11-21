@@ -5,59 +5,78 @@
  * the milestone dialog, notifications). Each write is read → merge → write,
  * which takes a second or more, so two components writing close together
  * would both read the same remote copy and the later publish would drop the
- * earlier one's change. This module holds the state those hook instances
- * must share. Everything is keyed by pubkey, so one account's writes never
- * wait on, or mix with, another's.
+ * earlier one's change. This module holds what those hook instances must
+ * share. Everything is keyed by pubkey, so one account's writes never wait
+ * on, or mix with, another's.
  */
-
-import type { AppSettings } from '@/lib/appSettings';
 
 const writeChains = new Map<string, Promise<void>>();
 
+/** Hold a cross-tab lock while `task` runs, where the browser supports it. */
+function withTabLock(pubkey: string, task: () => Promise<void>): Promise<void> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  if (!locks?.request) return task();
+  return locks.request(`gratefulday:settings-write:${pubkey}`, task);
+}
+
 /**
  * Run `task` after every earlier settings write for this pubkey has fully
- * finished (publish included). A failing task never blocks the ones after it.
+ * finished (publish included), in this tab and in other tabs of the same
+ * browser. A failing task never blocks the ones after it.
  */
 export function enqueueSettingsWrite(pubkey: string, task: () => Promise<void>): Promise<void> {
   const previous = writeChains.get(pubkey) ?? Promise.resolve();
-  const run = previous.then(task).catch(() => {});
+  const run = previous.then(() => withTabLock(pubkey, task)).catch(() => {});
   writeChains.set(pubkey, run);
   return run;
 }
 
-// --- Own last publish -------------------------------------------------------
-// Relays don't all store a new event at the same instant. A read made right
-// after our own publish can reach a majority that still holds the previous
-// event; merging against that would bring back the value we just replaced
-// (for `privacyDefault`, the user's older choice). We remember what this tab
-// last published and prefer it until relays return something at least as new.
+// --- Active account ---------------------------------------------------------
+// The account the app is rendering for right now. An async write started
+// under one account checks it before signing or notifying, so it can never
+// act as (or speak to) an account the user switched to, even if the component
+// that started the write has unmounted.
 
-interface PublishedSettings {
-  settings: AppSettings;
-  createdAt: number;
+let activePubkey: string | undefined;
+
+export function setActiveSettingsAccount(pubkey: string | undefined): void {
+  activePubkey = pubkey;
 }
 
-const lastPublished = new Map<string, PublishedSettings>();
-
-export function recordPublishedSettings(pubkey: string, settings: AppSettings, createdAt: number): void {
-  lastPublished.set(pubkey, { settings, createdAt });
+export function isActiveSettingsAccount(pubkey: string): boolean {
+  return activePubkey === pubkey;
 }
 
-/**
- * The newest remote state this tab knows of: what relays returned, unless our
- * own last publish is strictly newer than the newest event they returned.
- */
-export function newestKnownRemote(
-  pubkey: string,
-  fetched: AppSettings | null,
-  fetchedCreatedAt: number | undefined
-): AppSettings | null {
-  const own = lastPublished.get(pubkey);
-  if (!own) return fetched;
-  if ((fetchedCreatedAt ?? 0) < own.createdAt) return own.settings;
-  // Relays caught up (or hold something newer from another device).
-  lastPublished.delete(pubkey);
-  return fetched;
+// --- Local cache changes ----------------------------------------------------
+// The local cache lives in localStorage, shared by every hook instance (and
+// tab). Instances re-read it whenever any of them, or another tab, changes it,
+// so no component keeps computing from its own stale copy.
+
+const listeners = new Set<() => void>();
+let localVersion = 0;
+
+export function notifyLocalSettingsChanged(): void {
+  localVersion++;
+  for (const listener of listeners) listener();
+}
+
+export function subscribeLocalSettings(listener: () => void): () => void {
+  listeners.add(listener);
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === null || event.key.startsWith('gratefulday:')) {
+      localVersion++;
+      listener();
+    }
+  };
+  window.addEventListener('storage', onStorage);
+  return () => {
+    listeners.delete(listener);
+    window.removeEventListener('storage', onStorage);
+  };
+}
+
+export function getLocalSettingsVersion(): number {
+  return localVersion;
 }
 
 // --- "Privacy default not synced" notice ------------------------------------
@@ -80,6 +99,6 @@ export function clearPrivacyUnsyncedNotice(pubkey: string): void {
 /** Test helper: forget all in-memory state. */
 export function resetSettingsSync(): void {
   writeChains.clear();
-  lastPublished.clear();
   notifiedPending.clear();
+  activePubkey = undefined;
 }

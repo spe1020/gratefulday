@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useNostr } from '@nostrify/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -12,9 +12,12 @@ import { queryForDisplay, queryForWrite, readRelayUrls } from '@/lib/relayQuery'
 import {
   clearPrivacyUnsyncedNotice,
   enqueueSettingsWrite,
-  newestKnownRemote,
-  recordPublishedSettings,
+  getLocalSettingsVersion,
+  isActiveSettingsAccount,
+  notifyLocalSettingsChanged,
+  setActiveSettingsAccount,
   shouldNotifyPrivacyUnsynced,
+  subscribeLocalSettings,
 } from '@/lib/settingsSync';
 import {
   SETTINGS_KIND,
@@ -27,10 +30,14 @@ import {
   encryptSettings,
   mergeForWrite,
   needsSeed,
+  nextSettingsCreatedAt,
+  noteKnownSettingsAt,
   pickLatestEvent,
+  readKnownSettingsAt,
   readLocalCache,
   readPendingPrivacy,
   reconcile,
+  resolveAgainstKnown,
   resolveRemoteSettings,
   setPendingPrivacy,
   withPendingPrivacy,
@@ -101,19 +108,19 @@ export function useAppSettings(): UseAppSettingsResult {
 
   const pubkey = user?.pubkey;
 
-  // Instant hydrate from cache; re-read when the account changes.
-  const [localCache, setLocalCache] = useState<AppSettings>(() =>
-    pubkey ? readLocalCache(pubkey) : emptySettings()
+  // The local cache is read straight from localStorage, keyed by the current
+  // account, and re-read whenever any hook instance (or another tab) changes
+  // it. There is no per-component copy to go stale, and none that could carry
+  // one account's values into a render for another.
+  const localVersion = useSyncExternalStore(subscribeLocalSettings, getLocalSettingsVersion);
+  const localCache = useMemo<AppSettings>(
+    () => (pubkey ? readLocalCache(pubkey) : emptySettings()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pubkey, localVersion]
   );
-  useEffect(() => {
-    setLocalCache(pubkey ? readLocalCache(pubkey) : emptySettings());
-  }, [pubkey]);
 
-  // The account this instance is rendering for right now. An async write
-  // started under one account checks it before signing or notifying, so it
-  // can never act as (or speak to) the account the user switched to.
-  const activePubkeyRef = useRef(pubkey);
-  activePubkeyRef.current = pubkey;
+  // The account the app is rendering for right now (see `settingsSync`).
+  setActiveSettingsAccount(pubkey);
 
   const readRelays = useMemo(
     () => readRelayUrls(config.relayMetadata.relays),
@@ -138,7 +145,7 @@ export function useAppSettings(): UseAppSettingsResult {
     const fetched = await resolveRemoteSettings(user.signer, pubkey, events);
     // A successful decrypt is the definitive bunker capability signal.
     if (fetched && user.method === 'bunker') cacheNip44Support(pubkey, true);
-    return newestKnownRemote(pubkey, fetched, pickLatestEvent(events)?.created_at);
+    return resolveAgainstKnown(pubkey, fetched, pickLatestEvent(events)?.created_at);
   }, [nostr, readRelays, settingsFilter, pubkey, user]);
 
   /**
@@ -161,7 +168,12 @@ export function useAppSettings(): UseAppSettingsResult {
         fetched = null;
       }
       if (fetched && user.method === 'bunker') cacheNip44Support(pubkey, true);
-      return newestKnownRemote(pubkey, fetched, pickLatestEvent(events)?.created_at);
+      // A copy older than what this device already knows can't override the
+      // local privacy default (a single lagging relay is enough to answer a
+      // display read); a newer one is applied.
+      const resolved = resolveAgainstKnown(pubkey, fetched, pickLatestEvent(events)?.created_at);
+      notifyLocalSettingsChanged();
+      return resolved;
     },
     [nostr, readRelays, settingsFilter, pubkey, user]
   );
@@ -179,6 +191,8 @@ export function useAppSettings(): UseAppSettingsResult {
   // it has been published; see `setPendingPrivacy`.
   const settings = useMemo(
     () => withPendingPrivacy(reconcile(localCache, remote), pubkey ? readPendingPrivacy(pubkey) : undefined),
+    // `localCache` changes identity whenever local storage (pending marker
+    // included) changes.
     [localCache, remote, pubkey]
   );
 
@@ -187,7 +201,7 @@ export function useAppSettings(): UseAppSettingsResult {
   // component). Never shown after the user switched to another account.
   const notifyPrivacyUnsynced = useCallback(
     (forPubkey: string) => {
-      if (activePubkeyRef.current !== forPubkey) return;
+      if (!isActiveSettingsAccount(forPubkey)) return;
       const value = readPendingPrivacy(forPubkey);
       if (value === undefined || !shouldNotifyPrivacyUnsynced(forPubkey, value)) return;
       toast({
@@ -208,7 +222,7 @@ export function useAppSettings(): UseAppSettingsResult {
   const writeSettings = useCallback(
     async (patch: Partial<AppSettings>, seedOnly: boolean) => {
       if (!user || !pubkey || supported === false) return; // localStorage-only
-      const sameAccount = () => activePubkeyRef.current === pubkey;
+      const sameAccount = () => isActiveSettingsAccount(pubkey);
       try {
         // Read: never write against a remote we couldn't read. A timeout or a
         // decrypt failure throws here and skips the publish entirely.
@@ -228,6 +242,7 @@ export function useAppSettings(): UseAppSettingsResult {
           privacyDefault: readPendingPrivacy(pubkey) ?? patch.privacyDefault,
         });
         writeLocalCache(pubkey, next);
+        notifyLocalSettingsChanged();
         queryClient.setQueryData(['app-settings', pubkey], next);
         // The publish hook signs as whoever is logged in when it runs. After
         // an account switch that is someone else: stop here. The change is
@@ -240,11 +255,19 @@ export function useAppSettings(): UseAppSettingsResult {
         );
         if (user.method === 'bunker') cacheNip44Support(pubkey, true);
         if (!sameAccount()) return;
-        const event = await publish(buildSettingsEvent(ciphertext));
+        const event = await publish({
+          ...buildSettingsEvent(ciphertext),
+          // Always after the newest settings event this device knows of, so
+          // two writes in one second can't tie on relays.
+          created_at: nextSettingsCreatedAt(pubkey),
+        });
         if (event.pubkey !== pubkey) return;
-        recordPublishedSettings(pubkey, next, event.created_at);
+        // From here on, an older copy from a lagging relay can't override
+        // what was just published (see `resolveAgainstKnown`).
+        noteKnownSettingsAt(pubkey, event.created_at);
         clearPendingPrivacy(pubkey, next.privacyDefault);
         clearPrivacyUnsyncedNotice(pubkey);
+        notifyLocalSettingsChanged();
         queryClient.invalidateQueries({ queryKey: ['app-settings', pubkey] });
       } catch (error) {
         notifyPrivacyUnsynced(pubkey);
@@ -286,7 +309,7 @@ export function useAppSettings(): UseAppSettingsResult {
         setPendingPrivacy(pubkey, patch.privacyDefault);
       }
       writeLocalCache(pubkey, next);
-      setLocalCache(next);
+      notifyLocalSettingsChanged();
       // Optimistically advance the query cache so the local write takes effect
       // immediately. Otherwise `reconcile` would keep preferring the stale
       // remote event's privacyDefault until publish + refetch — and if
@@ -309,6 +332,9 @@ export function useAppSettings(): UseAppSettingsResult {
     if (!remoteQuery.isSuccess || remoteQuery.isFetching) return;
     if (remote) return; // already have a remote event
     if (seededFor.current === pubkey) return;
+    // This device already published or applied a settings event: one exists
+    // (or did), so a read that shows none is relay lag, not a first run.
+    if (readKnownSettingsAt(pubkey) > 0) return;
     if (!needsSeed(false, localCache)) return;
     seededFor.current = pubkey;
     void publishSettings({}, true);
