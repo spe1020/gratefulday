@@ -2,14 +2,21 @@ import { useQuery } from '@tanstack/react-query';
 import { useNostr } from '@nostrify/react';
 import type { NostrEvent } from '@nostrify/nostrify';
 import { dedupeEntriesByDTag } from '@/lib/streakUtils';
-import { getEntryTombstones, isEntryTombstoned } from '@/lib/entryTombstones';
+import {
+  entryAddress,
+  getEntryTombstones,
+  isEntryTombstoned,
+  mergeTombstones,
+  tombstonesFromDeletions,
+} from '@/lib/entryTombstones';
 
 /**
  * Hook to fetch all gratitude entries for a specific user.
  *
- * Results are validated, filtered against local deletion tombstones, and
- * deduped latest-wins per `d` tag, so consumers never depend on relay-side
- * replacement or deletion behavior.
+ * Results are validated, filtered against deletion tombstones (local ones and
+ * the user's own kind 5 deletions, so a delete made on another device or
+ * client hides here too), and deduped latest-wins per `d` tag, so consumers
+ * never depend on relay-side replacement or deletion behavior.
  */
 export function useGratitudeEntries(pubkey: string | undefined) {
   const { nostr } = useNostr();
@@ -29,11 +36,16 @@ export function useGratitudeEntries(pubkey: string | undefined) {
             // duplicates from relays that don't replace addressable events.
             limit: 500,
           },
+          // The user's own deletions of gratitude entries (NIP-09).
+          { kinds: [5], authors: [pubkey], '#k': ['36669'], limit: 500 },
         ],
         { signal }
       );
 
-      const tombstones = getEntryTombstones();
+      const tombstones = mergeTombstones(
+        getEntryTombstones(),
+        tombstonesFromDeletions(events, pubkey)
+      );
       return dedupeEntriesByDTag(
         events.filter((e) => validateGratitudeEntry(e) && !isEntryTombstoned(e, tombstones))
       );
@@ -64,11 +76,16 @@ export function useGratitudeEntry(pubkey: string | undefined, dateString: string
             // newest version wins below.
             limit: 5,
           },
+          // The user's own deletions of this day (NIP-09).
+          { kinds: [5], authors: [pubkey], '#a': [entryAddress(pubkey, dateString)], limit: 20 },
         ],
         { signal }
       );
 
-      const tombstones = getEntryTombstones();
+      const tombstones = mergeTombstones(
+        getEntryTombstones(),
+        tombstonesFromDeletions(events, pubkey)
+      );
       const candidates = events.filter(
         (e) => validateGratitudeEntry(e) && !isEntryTombstoned(e, tombstones)
       );

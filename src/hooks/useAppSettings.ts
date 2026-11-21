@@ -2,22 +2,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNostr } from '@nostrify/react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { useAppContext } from '@/hooks/useAppContext';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useNip44Support, cacheNip44Support } from '@/hooks/useNip44Support';
 import { Nip44UnsupportedError } from '@/lib/privacyUtils';
+import { queryForWrite, readRelayUrls } from '@/lib/relayQuery';
 import {
   SETTINGS_KIND,
   SETTINGS_D_TAG,
   type AppSettings,
+  applySettingsPatch,
   buildSettingsEvent,
-  decryptSettings,
   emptySettings,
   encryptSettings,
+  mergeForWrite,
   needsSeed,
-  pickLatestEvent,
   readLocalCache,
   reconcile,
+  resolveRemoteSettings,
   writeLocalCache,
 } from '@/lib/appSettings';
 
@@ -35,6 +38,8 @@ export interface UseAppSettingsResult {
 // Bunker NIP-44 round-trips over relays and can hang far longer than a load
 // should wait; a timeout falls back to localStorage-only rather than blocking.
 const ENCRYPT_TIMEOUT_MS = 20_000;
+/** Settings reads wait at most this long for a majority of read relays. */
+const SETTINGS_READ_TIMEOUT_MS = 3000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -59,10 +64,16 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  * fails soft to localStorage-only when the signer can't encrypt or relays are
  * unreachable. On first run it seeds the relay event from existing local values
  * so current users keep their state and don't re-celebrate.
+ *
+ * Every write is read → merge → write: it re-fetches the remote event first
+ * and merges against it. If that read times out (fewer than a majority of read
+ * relays answered) or the remote event can't be decrypted, the remote state is
+ * unknown and nothing is published; the change stays in the local cache.
  */
 export function useAppSettings(): UseAppSettingsResult {
   const { user } = useCurrentUser();
   const { nostr } = useNostr();
+  const { config } = useAppContext();
   const { supported } = useNip44Support();
   const { mutate: publish } = useNostrPublish();
   const queryClient = useQueryClient();
@@ -77,34 +88,66 @@ export function useAppSettings(): UseAppSettingsResult {
     setLocalCache(pubkey ? readLocalCache(pubkey) : emptySettings());
   }, [pubkey]);
 
+  const readRelays = useMemo(
+    () => readRelayUrls(config.relayMetadata.relays),
+    [config.relayMetadata.relays]
+  );
+
+  /**
+   * Fetch the remote settings. Resolves `null` only when a majority of read
+   * relays answered and none holds an event; throws on a timeout or a
+   * decrypt failure so neither can be mistaken for "no settings".
+   */
+  const fetchRemoteSettings = useCallback(
+    async (signal?: AbortSignal): Promise<AppSettings | null> => {
+      if (!pubkey || !user) return null;
+      const events = await queryForWrite(
+        nostr,
+        readRelays,
+        [{ kinds: [SETTINGS_KIND], authors: [pubkey], '#d': [SETTINGS_D_TAG], limit: 20 }],
+        { timeoutMs: SETTINGS_READ_TIMEOUT_MS, signal }
+      );
+      const settings = await resolveRemoteSettings(user.signer, pubkey, events);
+      // A successful decrypt is the definitive bunker capability signal.
+      if (settings && user.method === 'bunker') cacheNip44Support(pubkey, true);
+      return settings;
+    },
+    [nostr, readRelays, pubkey, user]
+  );
+
   const remoteQuery = useQuery({
     queryKey: ['app-settings', pubkey],
     // Skip entirely when we know encryption is unavailable — localStorage only.
     enabled: !!pubkey && supported !== false,
     staleTime: 5 * 60 * 1000,
-    queryFn: async (c) => {
-      if (!pubkey || !user) return null;
-      const signal = AbortSignal.any([c.signal, AbortSignal.timeout(3000)]);
-      const events = await nostr.query(
-        [{ kinds: [SETTINGS_KIND], authors: [pubkey], '#d': [SETTINGS_D_TAG], limit: 20 }],
-        { signal }
-      );
-      const latest = pickLatestEvent(events);
-      if (!latest) return null;
-      const settings = await decryptSettings(user.signer, pubkey, latest);
-      // A successful decrypt is the definitive bunker capability signal.
-      if (settings && user.method === 'bunker') cacheNip44Support(pubkey, true);
-      return settings;
-    },
+    queryFn: (c) => fetchRemoteSettings(c.signal),
   });
 
   const remote = remoteQuery.data ?? null;
   const settings = useMemo(() => reconcile(localCache, remote), [localCache, remote]);
 
-  const publishSettings = useCallback(
-    async (next: AppSettings) => {
+  // Writes run one at a time, so a slower read for an earlier change can't
+  // publish after (and so replace) a later one.
+  const writeChainRef = useRef<Promise<void>>(Promise.resolve());
+
+  const writeSettings = useCallback(
+    async (local: AppSettings, patch: Partial<AppSettings>, seedOnly: boolean) => {
       if (!user || !pubkey || supported === false) return; // localStorage-only
       try {
+        // Read: never write against a remote we couldn't read. A timeout or a
+        // decrypt failure throws here and skips the publish entirely.
+        const remote = await fetchRemoteSettings();
+        // The seed exists only to create a missing event; if one exists now,
+        // let the query pick it up instead.
+        if (seedOnly && remote) {
+          queryClient.setQueryData(['app-settings', pubkey], remote);
+          return;
+        }
+        // Merge.
+        const next = mergeForWrite(local, remote, patch);
+        writeLocalCache(pubkey, next);
+        setLocalCache(next);
+        // Write.
         const ciphertext = await withTimeout(
           encryptSettings(user.signer, pubkey, next),
           ENCRYPT_TIMEOUT_MS
@@ -116,15 +159,25 @@ export function useAppSettings(): UseAppSettingsResult {
           },
         });
       } catch (error) {
-        // Fail-soft: the cache already holds `next`, so nothing is lost and
-        // nothing scary is surfaced. A bunker that definitively can't encrypt
-        // is cached so we stop trying.
+        // Fail-soft: the cache already holds the change, so nothing is lost
+        // and nothing scary is surfaced; the next successful write carries it.
+        // A bunker that definitively can't encrypt is cached so we stop trying.
         if (user.method === 'bunker' && error instanceof Nip44UnsupportedError) {
           cacheNip44Support(pubkey, false);
         }
       }
     },
-    [user, pubkey, supported, publish, queryClient]
+    [user, pubkey, supported, publish, queryClient, fetchRemoteSettings]
+  );
+
+  const publishSettings = useCallback(
+    (local: AppSettings, patch: Partial<AppSettings>, seedOnly = false) => {
+      writeChainRef.current = writeChainRef.current.then(() =>
+        writeSettings(local, patch, seedOnly)
+      );
+      return writeChainRef.current;
+    },
+    [writeSettings]
   );
 
   const updateSettings = useCallback(
@@ -132,17 +185,7 @@ export function useAppSettings(): UseAppSettingsResult {
       if (!pubkey) return;
       // privacyDefault overwrites; celebratedMilestones unions (monotonic);
       // lastSeenNotifications takes the max (read-state never regresses).
-      const next: AppSettings = {
-        privacyDefault: patch.privacyDefault ?? settings.privacyDefault,
-        celebratedMilestones: [
-          ...new Set([...settings.celebratedMilestones, ...(patch.celebratedMilestones ?? [])]),
-        ].sort((a, b) => a - b),
-        lastSeenNotifications:
-          Math.max(
-            settings.lastSeenNotifications ?? 0,
-            patch.lastSeenNotifications ?? 0
-          ) || undefined,
-      };
+      const next = applySettingsPatch(settings, patch);
       writeLocalCache(pubkey, next);
       setLocalCache(next);
       // Optimistically advance the query cache so the local write takes effect
@@ -151,27 +194,29 @@ export function useAppSettings(): UseAppSettingsResult {
       // publishing fails or we're offline, the UI would never reflect the
       // write even though it's safely cached. This keeps the hook fail-soft.
       queryClient.setQueryData(['app-settings', pubkey], next);
-      void publishSettings(next);
+      void publishSettings(next, patch);
     },
     [pubkey, settings, publishSettings, queryClient]
   );
 
   // Migration: seed the relay event once from existing local values when no
-  // remote event exists yet (and encryption is available).
+  // remote event exists yet (and encryption is available). Only a successful
+  // read that found nothing counts as "no remote event" — a timed-out or
+  // undecryptable read is an error, and never seeds.
   const seededFor = useRef<string | null>(null);
   useEffect(() => {
     if (!pubkey || supported === false) return;
-    if (remoteQuery.isPending || remoteQuery.isFetching) return;
+    if (!remoteQuery.isSuccess || remoteQuery.isFetching) return;
     if (remote) return; // already have a remote event
     if (seededFor.current === pubkey) return;
     if (!needsSeed(false, localCache)) return;
     seededFor.current = pubkey;
-    void publishSettings(localCache);
+    void publishSettings(localCache, {}, true);
   }, [
     pubkey,
     supported,
     remote,
-    remoteQuery.isPending,
+    remoteQuery.isSuccess,
     remoteQuery.isFetching,
     localCache,
     publishSettings,

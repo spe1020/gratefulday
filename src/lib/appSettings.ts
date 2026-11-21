@@ -82,6 +82,34 @@ export function reconcile(local: AppSettings, remote: AppSettings | null): AppSe
 }
 
 /**
+ * Apply one local change on top of a base. `privacyDefault` overwrites when the
+ * patch sets it; `celebratedMilestones` unions (monotonic); and
+ * `lastSeenNotifications` takes the max (read-state never regresses).
+ */
+export function applySettingsPatch(base: AppSettings, patch: Partial<AppSettings>): AppSettings {
+  return {
+    privacyDefault: patch.privacyDefault ?? base.privacyDefault,
+    celebratedMilestones: unionSorted(base.celebratedMilestones, patch.celebratedMilestones ?? []),
+    lastSeenNotifications:
+      Math.max(base.lastSeenNotifications ?? 0, patch.lastSeenNotifications ?? 0) || undefined,
+  };
+}
+
+/**
+ * The object to publish: read, merge, then write. Reconcile the local state
+ * against the remote copy fetched just before this write, then re-apply the
+ * change being made, so neither a field another device changed nor the
+ * change itself is lost.
+ */
+export function mergeForWrite(
+  local: AppSettings,
+  remote: AppSettings | null,
+  patch: Partial<AppSettings>
+): AppSettings {
+  return applySettingsPatch(reconcile(local, remote), patch);
+}
+
+/**
  * Whether to seed a relay event from existing local values: only when no
  * remote event exists yet and the local cache actually holds something worth
  * preserving (a chosen privacy default or a celebrated milestone).
@@ -145,8 +173,9 @@ export function encryptSettings(
 }
 
 /**
- * Decrypt + parse a settings event's content. Returns null on any failure so
- * a corrupt or undecryptable event reads as "no remote settings" (fail-soft).
+ * Decrypt + parse a settings event's content. Returns null on any failure.
+ * Callers that are about to write must use `resolveRemoteSettings`, which
+ * turns that null into an error instead of "no remote settings".
  */
 export async function decryptSettings(
   signer: NostrSigner,
@@ -159,6 +188,35 @@ export async function decryptSettings(
   } catch {
     return null;
   }
+}
+
+/**
+ * The remote settings event exists but could not be decrypted or parsed. This
+ * is "unknown", never "no settings": writing over it would replace whatever it
+ * holds.
+ */
+export class SettingsUnreadableError extends Error {
+  constructor() {
+    super('Remote settings could not be decrypted');
+    this.name = 'SettingsUnreadableError';
+  }
+}
+
+/**
+ * Resolve fetched settings events to the remote state: `null` only when no
+ * event exists. Throws `SettingsUnreadableError` when the newest event can't
+ * be decrypted, so callers can't mistake it for an empty remote.
+ */
+export async function resolveRemoteSettings(
+  signer: NostrSigner,
+  pubkey: string,
+  events: NostrEvent[]
+): Promise<AppSettings | null> {
+  const latest = pickLatestEvent(events);
+  if (!latest) return null;
+  const settings = await decryptSettings(signer, pubkey, latest);
+  if (!settings) throw new SettingsUnreadableError();
+  return settings;
 }
 
 /** Publish template for a settings event (everything but signing/created_at). */

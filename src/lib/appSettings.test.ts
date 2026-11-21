@@ -8,6 +8,10 @@ import { generateSecretKey, getPublicKey } from 'nostr-tools';
 import { NSecSigner } from '@nostrify/nostrify';
 import type { NostrEvent } from '@nostrify/nostrify';
 import {
+  SettingsUnreadableError,
+  applySettingsPatch,
+  mergeForWrite,
+  resolveRemoteSettings,
   SETTINGS_D_TAG,
   SETTINGS_KIND,
   buildSettingsEvent,
@@ -237,5 +241,63 @@ describe('durability across a cache wipe (Phase 3)', () => {
         isCelebrated: (m) => settings.celebratedMilestones.includes(m),
       })
     ).toBeNull();
+  });
+});
+
+describe('read → merge → write helpers', () => {
+  it('applySettingsPatch: privacy overwrites, milestones union, lastSeen max', () => {
+    const base = { privacyDefault: true, celebratedMilestones: [7], lastSeenNotifications: 500 };
+    expect(
+      applySettingsPatch(base, { privacyDefault: false, celebratedMilestones: [30], lastSeenNotifications: 400 })
+    ).toEqual({ privacyDefault: false, celebratedMilestones: [7, 30], lastSeenNotifications: 500 });
+    expect(applySettingsPatch(base, {})).toEqual(base);
+  });
+
+  it('mergeForWrite keeps what another device wrote and still applies this change', () => {
+    const local = { privacyDefault: true, celebratedMilestones: [7], lastSeenNotifications: 100 };
+    // Another device since: celebrated 30, read notifications later, chose public.
+    const remote = { privacyDefault: false, celebratedMilestones: [30], lastSeenNotifications: 900 };
+    // This device is recording milestone 14 only.
+    expect(mergeForWrite(local, remote, { celebratedMilestones: [14] })).toEqual({
+      privacyDefault: false, // remote wins: this change didn't touch it
+      celebratedMilestones: [7, 14, 30],
+      lastSeenNotifications: 900,
+    });
+    // This device is choosing private now: the change wins.
+    expect(mergeForWrite(local, remote, { privacyDefault: true }).privacyDefault).toBe(true);
+  });
+
+  it('mergeForWrite with no remote event keeps local', () => {
+    const local = { privacyDefault: true, celebratedMilestones: [7] };
+    expect(mergeForWrite(local, null, {})).toEqual({ ...local, lastSeenNotifications: undefined });
+  });
+});
+
+describe('resolveRemoteSettings', () => {
+  it('returns null only when no event exists', async () => {
+    const sk = generateSecretKey();
+    const signer = new NSecSigner(sk);
+    expect(await resolveRemoteSettings(signer, getPublicKey(sk), [])).toBeNull();
+  });
+
+  it('decrypts the newest event', async () => {
+    const sk = generateSecretKey();
+    const pubkey = getPublicKey(sk);
+    const signer = new NSecSigner(sk);
+    const older = settingsEvent(await encryptSettings(signer, pubkey, { celebratedMilestones: [7] }), 1);
+    const newer = settingsEvent(await encryptSettings(signer, pubkey, { celebratedMilestones: [30] }), 2);
+    const result = await resolveRemoteSettings(signer, pubkey, [older, newer]);
+    expect(result?.celebratedMilestones).toEqual([30]);
+  });
+
+  it('throws SettingsUnreadableError when the newest event cannot be decrypted (never "no settings")', async () => {
+    const sk = generateSecretKey();
+    const pubkey = getPublicKey(sk);
+    const signer = new NSecSigner(sk);
+    const readable = settingsEvent(await encryptSettings(signer, pubkey, { celebratedMilestones: [7] }), 1);
+    const corrupt = settingsEvent('not-a-nip44-payload', 2);
+    await expect(resolveRemoteSettings(signer, pubkey, [readable, corrupt])).rejects.toBeInstanceOf(
+      SettingsUnreadableError
+    );
   });
 });
