@@ -109,3 +109,38 @@ describe('useGratitudeEntry — kind 5 deletions from other devices', () => {
     expect(result.current.data?.created_at).toBe(300);
   });
 });
+
+describe('journal entries from another author', () => {
+  const OTHER = 'b'.repeat(64);
+  const fromOther = (d: string, created_at: number): NostrEvent => ({
+    ...entry(d, created_at),
+    id: `other-${d}-${created_at}`,
+    pubkey: OTHER,
+    content: 'not mine',
+  });
+
+  it('useGratitudeEntries drops them, even when newer for the same day', async () => {
+    query.mockResolvedValue([
+      entry('2026-06-13', 100),
+      fromOther('2026-06-13', 200), // must not replace my own day
+      fromOther('2026-06-14', 100), // must not add a day to my journal
+    ]);
+    const { result } = renderHook(() => useGratitudeEntries(ME), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data!.map((e) => e.id)).toEqual(['e-2026-06-13-100']);
+  });
+
+  it('useGratitudeEntry drops them, even when newer', async () => {
+    query.mockResolvedValue([entry('2026-06-13', 100), fromOther('2026-06-13', 200)]);
+    const { result } = renderHook(() => useGratitudeEntry(ME, '2026-06-13'), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.id).toBe('e-2026-06-13-100');
+  });
+
+  it('useGratitudeEntry returns null when only another author has that day', async () => {
+    query.mockResolvedValue([fromOther('2026-06-13', 200)]);
+    const { result } = renderHook(() => useGratitudeEntry(ME, '2026-06-13'), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBeNull();
+  });
+});

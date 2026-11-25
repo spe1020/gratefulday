@@ -49,7 +49,12 @@ export function useGratitudeEntries(pubkey: string | undefined) {
         tombstonesFromDeletions(events, pubkey)
       );
       return dedupeEntriesByDTag(
-        events.filter((e) => validateGratitudeEntry(e) && !isEntryTombstoned(e, tombstones))
+        events.filter(
+          (e) =>
+            isAuthoredBy(e, pubkey) &&
+            validateGratitudeEntry(e) &&
+            !isEntryTombstoned(e, tombstones)
+        )
       );
     },
     enabled: !!pubkey,
@@ -89,7 +94,10 @@ export function useGratitudeEntry(pubkey: string | undefined, dateString: string
         tombstonesFromDeletions(events, pubkey)
       );
       const candidates = events.filter(
-        (e) => validateGratitudeEntry(e) && !isEntryTombstoned(e, tombstones)
+        (e) =>
+          isAuthoredBy(e, pubkey) &&
+          validateGratitudeEntry(e) &&
+          !isEntryTombstoned(e, tombstones)
       );
 
       return candidates.reduce<NostrEvent | null>(
@@ -183,6 +191,16 @@ export function useCommunityGratitude(
         .slice(0, limit);
     },
   });
+}
+
+/**
+ * Whether `event` was signed by `pubkey`. The relay layer has already checked
+ * the signature, so this ties a journal entry to the account it was asked
+ * for: an entry from any other author never appears in that account's
+ * journal, even if a relay returns one for an `authors` filter it ignored.
+ */
+function isAuthoredBy(event: NostrEvent, pubkey: string): boolean {
+  return event.pubkey === pubkey;
 }
 
 /**
