@@ -901,3 +901,68 @@ describe('DayDetailDialog — base-version check before save', () => {
     });
   });
 });
+
+// Audit L3 (account isolation post-merge review, 2026-11-25; Chief P87): a
+// draft carries over only from guest to the first account (the sign-in-to-save
+// path above). A draft started under account A must never be saved as B.
+describe('DayDetailDialog — account switch while a draft is open', () => {
+  const day = { ...TODAY, dayOfYear: 330, date: new Date(2026, 10, 25), dateString: '2026-11-25' };
+  const userA = { pubkey: 'pk-account-a', method: 'extension', signer: {} };
+  const userB = { pubkey: 'pk-account-b', method: 'extension', signer: {} };
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    publish.mockReset();
+    mockNip44.mockReturnValue({ supported: false });
+    mockExistingEntry.mockReturnValue({ data: null });
+    mockDecrypted.mockReturnValue({ content: '', isEncrypted: false, isDecrypting: false, decryptError: null });
+    mockUser.mockReturnValue({ user: userA });
+  });
+
+  const savedContents = () => publish.mock.calls.map(([event]) => (event as { content: string }).content);
+
+  it.each([
+    ['has no entry for the day', null],
+    ['already has an entry for the day', { ...encryptedEntry, id: 'b-entry', pubkey: userB.pubkey, tags: [['d', day.dateString]] }],
+  ])('does not save A\'s draft as B when B %s', async (_label, bEntry) => {
+    const view = render(<DayDetailDialog day={day} open onOpenChange={() => {}} />);
+    fireEvent.change(screen.getByTestId('editor'), { target: { value: "A's private words" } });
+
+    // Switch to B: B's day is looked up, then arrives.
+    mockUser.mockReturnValue({ user: userB });
+    mockExistingEntry.mockReturnValue({ data: undefined, isPending: true, isFetching: true });
+    view.rerender(<DayDetailDialog day={day} open onOpenChange={() => {}} />);
+    // A's unsaved words aren't shown to B, even while B's day is looked up.
+    expect(screen.queryByDisplayValue("A's private words")).not.toBeInTheDocument();
+    mockExistingEntry.mockReturnValue({ data: bEntry, isPending: false, isFetching: false });
+    mockDecrypted.mockReturnValue({ content: bEntry ? "B's saved words" : '', isEncrypted: false, isDecrypting: false, decryptError: null });
+    view.rerender(<DayDetailDialog day={day} open onOpenChange={() => {}} />);
+
+    expect(screen.queryByDisplayValue("A's private words")).not.toBeInTheDocument();
+    if (bEntry) expect(screen.getByText("B's saved words")).toBeVisible();
+    const save = screen.queryByRole('button', { name: /save entry/i });
+    if (save && !save.hasAttribute('disabled')) fireEvent.click(save);
+    await act(async () => {});
+    for (const content of savedContents()) expect(content).not.toContain("A's private words");
+  });
+
+  it("does not carry A's draft to B through a signed-out moment", async () => {
+    const view = render(<DayDetailDialog day={day} open onOpenChange={() => {}} />);
+    fireEvent.change(screen.getByTestId('editor'), { target: { value: "A's private words" } });
+
+    // A signs out (a guest moment), then B signs in: guest carry-over must
+    // not move A's words into B's day.
+    mockUser.mockReturnValue({ user: undefined });
+    view.rerender(<DayDetailDialog day={day} open onOpenChange={() => {}} />);
+    expect(screen.queryByDisplayValue("A's private words")).not.toBeInTheDocument();
+    mockUser.mockReturnValue({ user: userB });
+    view.rerender(<DayDetailDialog day={day} open onOpenChange={() => {}} />);
+
+    expect(screen.queryByDisplayValue("A's private words")).not.toBeInTheDocument();
+    const save = screen.queryByRole('button', { name: /save entry/i });
+    if (save && !save.hasAttribute('disabled')) fireEvent.click(save);
+    await act(async () => {});
+    for (const content of savedContents()) expect(content).not.toContain("A's private words");
+  });
+});
