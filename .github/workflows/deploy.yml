@@ -21,11 +21,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Single deploy job
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  # Build job. The upload runs here, in a separate job from the deploy, so the
+  # artifact is listed by the time deploy-pages looks for it
+  # (actions/deploy-pages#451).
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -51,6 +50,14 @@ jobs:
         with:
           path: dist
 
+  # Deploy job
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
