@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useAppContext } from '@/hooks/useAppContext';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { useRelayListGate } from '@/hooks/useRelayListGate';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useNip44Support, cacheNip44Support } from '@/hooks/useNip44Support';
 import { useToast } from '@/hooks/useToast';
@@ -99,6 +100,7 @@ export function useAppSettings(): UseAppSettingsResult {
   const { user } = useCurrentUser();
   const { nostr } = useNostr();
   const { config } = useAppContext();
+  const waitForRelayList = useRelayListGate();
   const { supported } = useNip44Support();
   // mutateAsync, not mutate: the write queue has to wait for the publish to
   // settle, and per-call mutate callbacks are dropped if the component unmounts.
@@ -139,7 +141,10 @@ export function useAppSettings(): UseAppSettingsResult {
    */
   const fetchRemoteForWrite = useCallback(async (): Promise<AppSettings | null> => {
     if (!pubkey || !user) return null;
-    const events = await queryForWrite(nostr, readRelays, settingsFilter, {
+    // The strict read that guards a write uses this account's own resolved
+    // relay list, never one in effect before it was known.
+    const { relays } = await waitForRelayList(pubkey);
+    const events = await queryForWrite(nostr, readRelayUrls(relays), settingsFilter, {
       timeoutMs: SETTINGS_READ_TIMEOUT_MS,
     });
     // Bounded like encrypt and sign: a bunker that never answers the decrypt
@@ -152,7 +157,7 @@ export function useAppSettings(): UseAppSettingsResult {
     // A successful decrypt is the definitive bunker capability signal.
     if (fetched && user.method === 'bunker') cacheNip44Support(pubkey, true);
     return resolveAgainstKnown(pubkey, fetched, pickLatestEvent(events)?.created_at);
-  }, [nostr, readRelays, settingsFilter, pubkey, user]);
+  }, [nostr, waitForRelayList, settingsFilter, pubkey, user]);
 
   /**
    * Tolerant read, used only to show settings. It takes whatever the relays

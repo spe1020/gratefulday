@@ -18,6 +18,8 @@ vi.mock('@/lib/relayQuery', async (importOriginal) => {
 import { useEntryBaseCheck } from './useEntryBaseCheck';
 import { IncompleteRelayReadError } from '@/lib/relayQuery';
 import { addEntryTombstone, entryAddress } from '@/lib/entryTombstones';
+import { RelayListContext, type RelayListContextType } from '@/contexts/RelayListContext';
+import type { ReactNode } from 'react';
 
 const ME = 'a'.repeat(64);
 const D = '2026-06-13';
@@ -84,5 +86,32 @@ describe('useEntryBaseCheck', () => {
   it('propagates an incomplete read so the caller does not save', async () => {
     queryForWrite.mockRejectedValue(new IncompleteRelayReadError(0, 1));
     await expect(check()(ME, D, null)).rejects.toBeInstanceOf(IncompleteRelayReadError);
+  });
+});
+
+describe('useEntryBaseCheck — per-account relays', () => {
+  it("waits for the account's relay list and reads from that list", async () => {
+    let release!: () => void;
+    const ready = new Promise<void>((r) => (release = r));
+    const relayList: RelayListContextType = {
+      activePubkey: ME,
+      status: 'unresolved',
+      resolveRelayList: vi.fn(),
+      waitForRelayList: vi.fn(async () => {
+        await ready;
+        return { relays: [{ url: 'wss://own', read: true, write: true }], updatedAt: 1 };
+      }),
+    };
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <RelayListContext.Provider value={relayList}>{children}</RelayListContext.Provider>
+    );
+    queryForWrite.mockResolvedValue([]);
+    const run = renderHook(() => useEntryBaseCheck(), { wrapper }).result.current(ME, D, null);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(queryForWrite).not.toHaveBeenCalled();
+    release();
+    expect(await run).toBe('ok');
+    expect(relayList.waitForRelayList).toHaveBeenCalledWith(ME, expect.any(AbortSignal));
+    expect(queryForWrite.mock.calls[0][1]).toEqual(['wss://own']);
   });
 });

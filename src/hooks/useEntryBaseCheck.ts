@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { useNostr } from '@nostrify/react';
 import type { NostrEvent } from '@nostrify/nostrify';
 
-import { useAppContext } from '@/hooks/useAppContext';
+import { useRelayListGate } from '@/hooks/useRelayListGate';
 import { validateGratitudeEntry } from '@/hooks/useGratitudeEntries';
 import {
   entryAddress,
@@ -26,13 +26,16 @@ export type EntryBaseCheckResult = 'ok' | 'conflict';
  */
 export function useEntryBaseCheck() {
   const { nostr } = useNostr();
-  const { config } = useAppContext();
+  const waitForRelayList = useRelayListGate();
 
   return useCallback(
     async (pubkey: string, dateString: string, base: EntryBase | null): Promise<EntryBaseCheckResult> => {
+      // Read from this account's own relays: "no newer version" on relays
+      // it doesn't use would say nothing.
+      const { relays } = await waitForRelayList(pubkey);
       const events = await queryForWrite(
         nostr,
-        readRelayUrls(config.relayMetadata.relays),
+        readRelayUrls(relays),
         [
           { kinds: [36669], authors: [pubkey], '#d': [dateString], limit: 5 },
           { kinds: [5], authors: [pubkey], '#a': [entryAddress(pubkey, dateString)], limit: 20 },
@@ -61,6 +64,6 @@ export function useEntryBaseCheck() {
 
       return hasEntryConflict(base, toEntryBase(latest), deletedAt) ? 'conflict' : 'ok';
     },
-    [nostr, config.relayMetadata.relays]
+    [nostr, waitForRelayList]
   );
 }

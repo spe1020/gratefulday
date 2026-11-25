@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useContext } from 'react';
 import { Plus, X, Wifi, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useAppContext } from '@/hooks/useAppContext';
+import { RelayListContext } from '@/contexts/RelayListContext';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
 import { useNostrPublish } from '@/hooks/useNostrPublish';
 import { useToast } from '@/hooks/useToast';
@@ -21,6 +22,10 @@ export function RelayListManager() {
   const { user } = useCurrentUser();
   const { mutate: publishEvent } = useNostrPublish();
   const { toast } = useToast();
+  // Until the signed-in account's own list has been looked up, the list
+  // shown is the defaults: saving an edit then would publish those as the
+  // account's list and replace the one it really has.
+  const loading = useContext(RelayListContext)?.status === 'unresolved';
 
   const [relays, setRelays] = useState<Relay[]>(config.relayMetadata.relays);
   const [newRelayUrl, setNewRelayUrl] = useState('');
@@ -57,6 +62,7 @@ export function RelayListManager() {
   };
 
   const handleAddRelay = () => {
+    if (loading) return;
     if (!isValidRelayUrl(newRelayUrl)) {
       toast({
         title: 'Invalid relay URL',
@@ -107,6 +113,7 @@ export function RelayListManager() {
   };
 
   const saveRelays = (newRelays: Relay[]) => {
+    if (loading) return;
     const now = Math.floor(Date.now() / 1000);
 
     // Update local config
@@ -200,6 +207,7 @@ export function RelayListManager() {
                   variant="ghost"
                   size="icon"
                   className="size-5 text-muted-foreground hover:text-foreground shrink-0"
+                  disabled={loading}
                 >
                   <Settings className="h-4 w-4" />
                 </Button>
@@ -238,7 +246,7 @@ export function RelayListManager() {
               size="icon"
               onClick={() => handleRemoveRelay(relay.url)}
               className="size-5 text-muted-foreground hover:text-destructive hover:bg-transparent shrink-0"
-              disabled={relays.length <= 1}
+              disabled={loading || relays.length <= 1}
             >
               <X className="h-4 w-4" />
             </Button>
@@ -256,6 +264,7 @@ export function RelayListManager() {
             id="new-relay-url"
             placeholder="Enter relay URL (e.g., wss://relay.example.com)"
             value={newRelayUrl}
+            disabled={loading}
             onChange={(e) => setNewRelayUrl(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
@@ -266,7 +275,7 @@ export function RelayListManager() {
         </div>
         <Button
           onClick={handleAddRelay}
-          disabled={!newRelayUrl.trim()}
+          disabled={loading || !newRelayUrl.trim()}
           variant="outline"
           size="sm"
           className="h-10 shrink-0"

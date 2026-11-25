@@ -2,6 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 
 import { useCurrentUser } from "./useCurrentUser";
+import { useRelayListGate } from "./useRelayListGate";
 
 import type { NostrEvent, NostrSigner } from "@nostrify/nostrify";
 
@@ -39,10 +40,15 @@ async function signWithTimeout(
 export function useNostrPublish(): UseMutationResult<NostrEvent> {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const waitForRelayList = useRelayListGate();
 
   return useMutation({
     mutationFn: async (t: Omit<NostrEvent, 'id' | 'pubkey' | 'sig'>) => {
       if (user) {
+        // Never publish for an account before its own relay list is known:
+        // until then the relays in effect may not be the ones it chose.
+        await waitForRelayList(user.pubkey);
+
         const tags = t.tags ?? [];
 
         // Add the client tag if it doesn't exist

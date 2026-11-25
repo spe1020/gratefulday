@@ -1,62 +1,75 @@
-import { useEffect } from 'react';
+import { useContext, useEffect } from 'react';
 import { useNostr } from '@nostrify/react';
-import { useCurrentUser } from '@/hooks/useCurrentUser';
-import { useAppContext } from '@/hooks/useAppContext';
+
+import type { RelayMetadata } from '@/contexts/AppContext';
+import { RelayListContext } from '@/contexts/RelayListContext';
+import { latestRelayList, readAccountRelays, relaysFromNip65 } from '@/lib/accountRelays';
+import { queryForWrite, readRelayUrls } from '@/lib/relayQuery';
+
+/** One lookup attempt. */
+const LOOKUP_TIMEOUT_MS = 5000;
+/** Wait before trying again after too few relays answered. */
+const RETRY_DELAY_MS = 5000;
+
+interface NostrSyncProps {
+  /** The app's default relays, where NIP-65 lists are looked up. */
+  defaultRelays: RelayMetadata;
+}
 
 /**
- * NostrSync - Syncs user's Nostr data
+ * Looks up the signed-in account's NIP-65 relay list (kind 10002) once per
+ * account per session, and reports the result to `AccountRelayProvider`.
  *
- * This component runs globally to sync various Nostr data when the user logs in.
- * Currently syncs:
- * - NIP-65 relay list (kind 10002)
+ * "No list" is only concluded when a majority of the relays asked answered
+ * (strict read): a timeout is unknown, not empty, so the lookup is retried
+ * and writes keep waiting. Relays asked: the app defaults, plus this
+ * account's own stored relays.
  */
-export function NostrSync() {
+export function NostrSync({ defaultRelays }: NostrSyncProps) {
   const { nostr } = useNostr();
-  const { user } = useCurrentUser();
-  const { config, updateConfig } = useAppContext();
+  const relayList = useContext(RelayListContext);
+  const pubkey = relayList?.activePubkey;
+  const status = relayList?.status;
+  const resolveRelayList = relayList?.resolveRelayList;
 
   useEffect(() => {
-    if (!user) return;
+    if (!pubkey || status !== 'unresolved' || !resolveRelayList) return;
 
-    const syncRelaysFromNostr = async () => {
+    const controller = new AbortController();
+    let retry: ReturnType<typeof setTimeout> | undefined;
+
+    const lookup = async () => {
+      const own = readAccountRelays()[pubkey]?.relays ?? [];
+      const relays = [
+        ...new Set([...readRelayUrls(defaultRelays.relays), ...readRelayUrls(own)]),
+      ];
       try {
-        const events = await nostr.query(
-          [{ kinds: [10002], authors: [user.pubkey], limit: 1 }],
-          { signal: AbortSignal.timeout(5000) }
+        const events = await queryForWrite(
+          nostr,
+          relays,
+          [{ kinds: [10002], authors: [pubkey], limit: 5 }],
+          { timeoutMs: LOOKUP_TIMEOUT_MS, signal: controller.signal }
         );
-
-        if (events.length > 0) {
-          const event = events[0];
-
-          // Only update if the event is newer than our stored data
-          if (event.created_at > config.relayMetadata.updatedAt) {
-            const fetchedRelays = event.tags
-              .filter(([name]) => name === 'r')
-              .map(([_, url, marker]) => ({
-                url,
-                read: !marker || marker === 'read',
-                write: !marker || marker === 'write',
-              }));
-
-            if (fetchedRelays.length > 0) {
-              console.log('Syncing relay list from Nostr:', fetchedRelays);
-              updateConfig((current) => ({
-                ...current,
-                relayMetadata: {
-                  relays: fetchedRelays,
-                  updatedAt: event.created_at,
-                },
-              }));
-            }
-          }
-        }
+        if (controller.signal.aborted) return;
+        const latest = latestRelayList(events, pubkey);
+        if (latest) console.log('Syncing relay list from Nostr:', relaysFromNip65(latest));
+        resolveRelayList(
+          pubkey,
+          latest ? { relays: relaysFromNip65(latest), updatedAt: latest.created_at } : null
+        );
       } catch (error) {
-        console.error('Failed to sync relays from Nostr:', error);
+        if (controller.signal.aborted) return;
+        console.warn('Relay list lookup incomplete, retrying:', error);
+        retry = setTimeout(lookup, RETRY_DELAY_MS);
       }
     };
 
-    syncRelaysFromNostr();
-  }, [user, config.relayMetadata.updatedAt, nostr, updateConfig]);
+    lookup();
+    return () => {
+      controller.abort();
+      clearTimeout(retry);
+    };
+  }, [pubkey, status, resolveRelayList, nostr, defaultRelays]);
 
   return null;
 }

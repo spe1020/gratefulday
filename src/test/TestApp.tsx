@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import { NostrLoginProvider } from '@nostrify/react/login';
 import NostrProvider from '@/components/NostrProvider';
 import { AppProvider } from '@/components/AppProvider';
+import { AccountRelayProvider } from '@/components/AccountRelayProvider';
 import { NWCProvider } from '@/contexts/NWCContext';
 import { AppConfig } from '@/contexts/AppContext';
 import { DEFAULT_TEACHING_PREFERENCES } from '@/lib/teachingUtils';
@@ -39,13 +40,15 @@ export function TestApp({ children }: TestAppProps) {
       <AppProvider storageKey='test-app-config' defaultConfig={defaultConfig}>
         <QueryClientProvider client={queryClient}>
           <NostrLoginProvider storageKey='test-login'>
-            <NostrProvider>
-              <NWCProvider>
-                <BrowserRouter>
-                  {children}
-                </BrowserRouter>
-              </NWCProvider>
-            </NostrProvider>
+            <AccountRelayProvider defaultRelays={defaultConfig.relayMetadata}>
+              <NostrProvider>
+                <NWCProvider>
+                  <BrowserRouter>
+                    {children}
+                  </BrowserRouter>
+                </NWCProvider>
+              </NostrProvider>
+            </AccountRelayProvider>
           </NostrLoginProvider>
         </QueryClientProvider>
       </AppProvider>

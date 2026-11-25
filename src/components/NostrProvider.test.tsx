@@ -37,6 +37,22 @@ vi.mock('@nostrify/nostrify', async (importOriginal) => {
         }
         return [...found.values()];
       }
+
+      // Per-relay reads (NostrSync's strict lookup): what that relay holds,
+      // then EOSE.
+      async *req(filters: NostrFilter[], opts?: { relays?: string[] }) {
+        for (const url of opts?.relays ?? []) {
+          for (const event of relayEvents.get(url) ?? []) {
+            const wanted = filters.some(
+              (f) =>
+                (!f.kinds || f.kinds.includes(event.kind)) &&
+                (!f.authors || f.authors.includes(event.pubkey))
+            );
+            if (wanted) yield ['EVENT', 'sub', event] as const;
+          }
+        }
+        yield ['EOSE', 'sub'] as const;
+      }
     },
   };
 });
@@ -45,9 +61,14 @@ let currentUser: { pubkey: string } | undefined;
 vi.mock('@/hooks/useCurrentUser', () => ({
   useCurrentUser: () => ({ user: currentUser }),
 }));
+vi.mock('@nostrify/react/login', () => ({
+  useNostrLogin: () => ({ logins: currentUser ? [currentUser] : [] }),
+}));
 
 import NostrProvider from './NostrProvider';
 import { AppProvider } from './AppProvider';
+import { AccountRelayProvider } from './AccountRelayProvider';
+import { ACCOUNT_RELAYS_KEY } from '@/lib/accountRelays';
 import { NostrSync } from './NostrSync';
 import { useGratitudeEntries } from '@/hooks/useGratitudeEntries';
 import { useAppContext } from '@/hooks/useAppContext';
@@ -86,16 +107,21 @@ function setup() {
   render(
     <AppProvider storageKey={STORAGE_KEY} defaultConfig={defaultConfig}>
       <QueryClientProvider client={queryClient}>
-        <NostrProvider>
-          <Capture />
-        </NostrProvider>
+        <AccountRelayProvider defaultRelays={defaultConfig.relayMetadata}>
+          <NostrProvider>
+            <Capture />
+          </NostrProvider>
+        </AccountRelayProvider>
       </QueryClientProvider>
     </AppProvider>
   );
   return { queryClient, pool: pools[pools.length - 1] };
 }
 
-/** What NostrSync does when it finds the account's NIP-65 list after login. */
+/**
+ * A relay list applied after start. Signed out here, so it lands in the guest
+ * slot; for an account, NostrSync applies its NIP-65 list the same way.
+ */
 function applyAccountRelayList() {
   act(() => {
     updateConfig((current) => ({
@@ -126,6 +152,7 @@ describe('NostrProvider relay routing', () => {
     relayEvents.clear();
     currentUser = undefined;
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(ACCOUNT_RELAYS_KEY);
   });
 
   it('routes to the configured relays at start', async () => {
@@ -231,10 +258,12 @@ describe('NostrProvider relay routing', () => {
     render(
       <AppProvider storageKey={STORAGE_KEY} defaultConfig={defaultConfig}>
         <QueryClientProvider client={queryClient}>
-          <NostrProvider>
-            <NostrSync />
-            <Journal />
-          </NostrProvider>
+          <AccountRelayProvider defaultRelays={defaultConfig.relayMetadata}>
+            <NostrProvider>
+              <NostrSync defaultRelays={defaultConfig.relayMetadata} />
+              <Journal />
+            </NostrProvider>
+          </AccountRelayProvider>
         </QueryClientProvider>
       </AppProvider>
     );

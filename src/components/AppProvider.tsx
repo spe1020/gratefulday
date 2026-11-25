@@ -54,7 +54,17 @@ export function AppProvider(props: AppProviderProps) {
     setConfig(updater);
   };
 
-  const config = { ...defaultConfig, ...rawConfig };
+  // The relay list is per account (AccountRelayProvider). A list stored here
+  // by an older version belonged to whichever account last synced in this
+  // browser, so it is never applied, and is removed from storage.
+  const { relayMetadata: legacyRelayMetadata, ...storedConfig } = rawConfig;
+  useEffect(() => {
+    if (legacyRelayMetadata === undefined) return;
+    setConfig(({ relayMetadata: _dropped, ...rest }) => rest);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [legacyRelayMetadata]);
+
+  const config = { ...defaultConfig, ...storedConfig };
 
   const appContextValue: AppContextType = {
     config,

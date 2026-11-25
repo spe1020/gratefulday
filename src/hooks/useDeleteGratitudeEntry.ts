@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNostr } from '@nostrify/react';
 import type { NostrEvent } from '@nostrify/nostrify';
 import { useCurrentUser } from '@/hooks/useCurrentUser';
+import { useRelayListGate } from '@/hooks/useRelayListGate';
 import { addEntryTombstone, entryAddress } from '@/lib/entryTombstones';
 import { unlinkWisdomReflections } from '@/lib/wisdomStore';
 
@@ -15,6 +16,7 @@ import { unlinkWisdomReflections } from '@/lib/wisdomStore';
 export function useDeleteGratitudeEntry() {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const waitForRelayList = useRelayListGate();
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -30,6 +32,9 @@ export function useDeleteGratitudeEntry() {
       if (!dateString) {
         throw new Error('Entry has no date tag');
       }
+
+      // As for every publish: only once this account's relay list is known.
+      await waitForRelayList(user.pubkey);
 
       const deletion = await user.signer.signEvent({
         kind: 5,
