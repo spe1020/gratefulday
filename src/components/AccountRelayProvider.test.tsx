@@ -18,6 +18,8 @@ const deadRelays = new Set<string>();
 const asked: string[] = [];
 /** Pool reads (the journal queries): who they were for, and where they went. */
 const reads: { authors: string[]; relays: string[] }[] = [];
+/** Every event handed to the pool to send. */
+const sent: NostrEvent[] = [];
 
 vi.mock('@nostrify/nostrify', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@nostrify/nostrify')>();
@@ -30,6 +32,9 @@ vi.mock('@nostrify/nostrify', async (importOriginal) => {
       async query(filters: NostrFilter[]): Promise<NostrEvent[]> {
         reads.push({ authors: filters.flatMap((f) => f.authors ?? []), relays: [...(await this.opts.reqRouter(filters)).keys()] });
         return [];
+      }
+      async event(event: NostrEvent): Promise<void> {
+        sent.push(event);
       }
       async *req(filters: NostrFilter[], opts?: { relays?: string[] }) {
         for (const url of opts?.relays ?? []) {
@@ -55,12 +60,35 @@ vi.mock('@nostrify/react/login', () => ({
   useNostrLogin: () => ({ logins }),
 }));
 
+// The signed-in user follows `logins`, like the real hook. Signing waits for
+// `signing.release()` when a test holds it, so the account can change
+// mid-signature.
+const signing = { hold: false, started: () => {}, release: () => {} };
+vi.mock('@/hooks/useCurrentUser', () => ({
+  useCurrentUser: () => {
+    const pubkey = logins[0]?.pubkey;
+    if (!pubkey) return { user: undefined };
+    const signEvent = async (t: Omit<NostrEvent, 'id' | 'pubkey' | 'sig'>) => {
+      if (signing.hold) {
+        await new Promise<void>((resolve) => {
+          signing.release = resolve;
+          signing.started();
+        });
+      }
+      return { ...t, id: `signed-${t.kind}`, pubkey, sig: 'sig' } as NostrEvent;
+    };
+    return { user: { pubkey, signer: { signEvent } } };
+  },
+}));
+
 import NostrProvider from './NostrProvider';
 import { AppProvider } from './AppProvider';
 import { AccountRelayProvider } from './AccountRelayProvider';
 import { NostrSync } from './NostrSync';
 import { useAppContext } from '@/hooks/useAppContext';
 import { useGratitudeEntries } from '@/hooks/useGratitudeEntries';
+import { useNostrPublish } from '@/hooks/useNostrPublish';
+import { useDeleteGratitudeEntry } from '@/hooks/useDeleteGratitudeEntry';
 import { RelayListContext, type RelayListContextType } from '@/contexts/RelayListContext';
 import type { AppConfig, AppContextType } from '@/contexts/AppContext';
 import {
@@ -112,6 +140,17 @@ function Capture() {
   return null;
 }
 
+let writers: {
+  publish: ReturnType<typeof useNostrPublish>['mutateAsync'];
+  remove: ReturnType<typeof useDeleteGratitudeEntry>['mutateAsync'];
+};
+
+/** The real publish and delete hooks, as the day editor uses them. */
+function Writers() {
+  writers = { publish: useNostrPublish().mutateAsync, remove: useDeleteGratitudeEntry().mutateAsync };
+  return null;
+}
+
 /** The journal, as the calendar reads it for the active account. */
 function Journal() {
   useGratitudeEntries(useContext(RelayListContext)?.activePubkey);
@@ -127,6 +166,7 @@ function Tree() {
             <NostrSync defaultRelays={defaultRelays} />
             <Capture />
             <Journal />
+            <Writers />
           </NostrProvider>
         </AccountRelayProvider>
       </QueryClientProvider>
@@ -151,6 +191,8 @@ beforeEach(() => {
   deadRelays.clear();
   asked.length = 0;
   reads.length = 0;
+  sent.length = 0;
+  signing.hold = false;
   logins = [];
   localStorage.removeItem(STORAGE_KEY);
   localStorage.removeItem(ACCOUNT_RELAYS_KEY);
@@ -318,5 +360,67 @@ describe('relay list per account', () => {
     await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual({ theme: 'dark' }));
     await waitFor(() => expect(gate.status).toBe('resolved'));
     expect(await writeRoutes()).toEqual(allDefaults);
+  });
+});
+
+describe('an account switch while the signer works', () => {
+  const C_ENTRY: NostrEvent = {
+    id: 'entry-c',
+    kind: 36669,
+    pubkey: C,
+    created_at: 100,
+    content: 'x',
+    sig: '',
+    tags: [['d', '2026-11-24']],
+  };
+
+  // Each write starts as C with C's list known; B (whose list is also known)
+  // signs in before C's signature comes back. The write was started from a
+  // render where C was active, so only the provider's live check can see the
+  // switch.
+  it.each([
+    ['a publish', () => writers.publish({ kind: 36669, content: 'x', tags: [['d', '2026-11-24']] })],
+    ['a delete', () => writers.remove(C_ENTRY)],
+  ])('%s signed as C is refused, not sent through B’s relays', async (_name, write) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    relayEvents.set(DEFAULT_A, [relayList(C, C_RELAY, 100), relayList(B, B_RELAY, 100)]);
+    logins = [{ pubkey: C }];
+    const { rerender } = render(<Tree />);
+    await waitFor(() => expect(gate.status).toBe('resolved'));
+
+    signing.hold = true;
+    const signingStarted = new Promise<void>((r) => (signing.started = r));
+    let result!: Promise<unknown>;
+    act(() => {
+      result = write();
+    });
+    const settled = result.then(
+      () => 'sent',
+      (error: unknown) => error
+    );
+    await signingStarted;
+
+    signIn(B, rerender);
+    await waitFor(() => expect(gate.status).toBe('resolved'));
+    expect(await writeRoutes()).toEqual([B_RELAY]);
+
+    await act(async () => {
+      signing.release();
+      await settled;
+    });
+    expect(await settled).toBeInstanceOf(RelayAccountChangedError);
+    expect(sent).toEqual([]);
+  });
+
+  it('a write that stays on one account is sent', async () => {
+    relayEvents.set(DEFAULT_A, [relayList(C, C_RELAY, 100)]);
+    logins = [{ pubkey: C }];
+    render(<Tree />);
+    await waitFor(() => expect(gate.status).toBe('resolved'));
+
+    await act(async () => {
+      await writers.publish({ kind: 36669, content: 'x', tags: [['d', '2026-11-24']] });
+    });
+    expect(sent.map((e) => e.pubkey)).toEqual([C]);
   });
 });
