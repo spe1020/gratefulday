@@ -804,3 +804,26 @@ describe('useAppSettings — a signer that never answers the decrypt', () => {
     });
   });
 });
+
+describe('useAppSettings — per-account relays', () => {
+  it("the strict read before a write uses the account's resolved relay list", async () => {
+    const { RelayListContext } = await import('@/contexts/RelayListContext');
+    const waitForRelayList = vi.fn(async () => ({
+      relays: [{ url: 'wss://own', read: true, write: true }],
+      updatedAt: 1,
+    }));
+    const value = { activePubkey: 'pk-self', status: 'resolved' as const, resolveRelayList: vi.fn(),
+    isActive: () => true, waitForRelayList };
+    const withRelays = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <RelayListContext.Provider value={value}>{children}</RelayListContext.Provider>
+      </QueryClientProvider>
+    );
+    const { result } = renderHook(() => useAppSettings(), { wrapper: withRelays });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    act(() => result.current.updateSettings({ privacyDefault: true }));
+    await waitFor(() => expect(publish).toHaveBeenCalled());
+    expect(waitForRelayList).toHaveBeenCalledWith('pk-self', expect.any(AbortSignal));
+    for (const call of queryForWrite.mock.calls) expect(call[1]).toEqual(['wss://own']);
+  });
+});

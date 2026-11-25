@@ -2,6 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 
 import { useCurrentUser } from "./useCurrentUser";
+import { useAssertStillActive, useRelayListGate } from "./useRelayListGate";
 
 import type { NostrEvent, NostrSigner } from "@nostrify/nostrify";
 
@@ -39,10 +40,16 @@ async function signWithTimeout(
 export function useNostrPublish(): UseMutationResult<NostrEvent> {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
+  const waitForRelayList = useRelayListGate();
+  const assertStillActive = useAssertStillActive();
 
   return useMutation({
     mutationFn: async (t: Omit<NostrEvent, 'id' | 'pubkey' | 'sig'>) => {
       if (user) {
+        // Never publish for an account before its own relay list is known:
+        // until then the relays in effect may not be the ones it chose.
+        await waitForRelayList(user.pubkey);
+
         const tags = t.tags ?? [];
 
         // Add the client tag if it doesn't exist
@@ -56,6 +63,11 @@ export function useNostrPublish(): UseMutationResult<NostrEvent> {
           tags,
           created_at: t.created_at ?? Math.floor(Date.now() / 1000),
         });
+
+        // Signing can take seconds. If another account became active
+        // meanwhile, the pool would route this event to that account's
+        // relays: refuse instead (fail closed, nothing is sent).
+        assertStillActive(user.pubkey);
 
         await nostr.event(event, { signal: AbortSignal.timeout(5000) });
         return event;

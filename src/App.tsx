@@ -12,6 +12,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { NostrLoginProvider } from '@nostrify/react/login';
 import { AppProvider } from '@/components/AppProvider';
+import { AccountRelayProvider } from '@/components/AccountRelayProvider';
 import { NWCProvider } from '@/contexts/NWCContext';
 import { AppConfig } from '@/contexts/AppContext';
 import { DEFAULT_TEACHING_PREFERENCES } from '@/lib/teachingUtils';
@@ -55,18 +56,20 @@ export function App() {
       <AppProvider storageKey="nostr:app-config" defaultConfig={defaultConfig}>
         <QueryClientProvider client={queryClient}>
           <NostrLoginProvider storageKey='nostr:login'>
-            <NostrProvider>
-              <LoginPersistence />
-              <NostrSync />
-              <NWCProvider>
-                <TooltipProvider>
-                  <Toaster />
-                  <Suspense>
-                    <AppRouter />
-                  </Suspense>
-                </TooltipProvider>
-              </NWCProvider>
-            </NostrProvider>
+            <AccountRelayProvider defaultRelays={defaultConfig.relayMetadata}>
+              <NostrProvider>
+                <LoginPersistence />
+                <NostrSync defaultRelays={defaultConfig.relayMetadata} />
+                <NWCProvider>
+                  <TooltipProvider>
+                    <Toaster />
+                    <Suspense>
+                      <AppRouter />
+                    </Suspense>
+                  </TooltipProvider>
+                </NWCProvider>
+              </NostrProvider>
+            </AccountRelayProvider>
           </NostrLoginProvider>
         </QueryClientProvider>
       </AppProvider>
