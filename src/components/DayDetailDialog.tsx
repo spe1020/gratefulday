@@ -275,6 +275,22 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
   // The relay version this editor session started from (or last saved). A
   // save first checks the day still has exactly this version on relays.
   const baseRef = useRef<EntryBase | null>(null);
+  // A draft belongs to the account it was typed under (Audit L3, Chief P89).
+  // When an account changes to anything else (another account, or signed
+  // out, from where the next sign-in would carry it over), the unsaved draft
+  // is discarded, not kept: it was never saved, and showing it to the next
+  // account would itself be a leak. Guest -> account carry-over is unchanged.
+  // Declared before the seeding effect so it runs first in the same commit.
+  const draftOwnerRef = useRef(ownerPubkey);
+  useEffect(() => {
+    const previous = draftOwnerRef.current;
+    draftOwnerRef.current = ownerPubkey;
+    if (!previous || previous === ownerPubkey) return;
+    setNotes([makeNote('', 'draft')]);
+    savedContentRef.current = '';
+    baseRef.current = null;
+    seededKeyRef.current = null;
+  }, [ownerPubkey]);
   useEffect(() => {
     if (!open) {
       seededKeyRef.current = null;
