@@ -854,6 +854,28 @@ describe('DayDetailDialog — base-version check before save', () => {
     expect(screen.getByTestId('editor')).toHaveValue('morning walk, and coffee');
   });
 
+  // The same refusal can also come later, from the publish itself: the
+  // account changed while the signer was working (useNostrPublish refuses to
+  // send). It must read the same as the refusal before the save.
+  it.each([/save entry/i, /share to nostr/i])(
+    'says the account changed when %s is refused after signing',
+    async (button) => {
+      const { RelayAccountChangedError } = await import('@/lib/accountRelays');
+      publish.mockImplementation((_event, opts) => opts?.onError?.(new RelayAccountChangedError()));
+      await editAndClick(button);
+      await waitFor(() =>
+        expect(toast).toHaveBeenCalledWith(
+          expect.objectContaining({
+            title: 'Failed to save',
+            description: 'Nothing was saved, because the signed-in account changed. Your notes are still here.',
+          })
+        )
+      );
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('editor')).toHaveValue('morning walk, and coffee');
+    }
+  );
+
   it('a conflict also blocks Share: no 36669 and no kind 1', async () => {
     checkEntryBase.mockImplementation(() => Promise.resolve('conflict'));
     await editAndClick(/share to nostr/i);
