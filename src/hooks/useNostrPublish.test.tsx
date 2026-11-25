@@ -14,11 +14,15 @@ import { useNostrPublish } from './useNostrPublish';
 import { RelayListContext, type RelayListContextType } from '@/contexts/RelayListContext';
 import { RelayAccountChangedError } from '@/lib/accountRelays';
 
-function setup(waitForRelayList: RelayListContextType['waitForRelayList']) {
+function setup(
+  waitForRelayList: RelayListContextType['waitForRelayList'],
+  isActive: RelayListContextType['isActive'] = () => true
+) {
   const relayList: RelayListContextType = {
     activePubkey: ME,
     status: 'unresolved',
     resolveRelayList: vi.fn(),
+    isActive,
     waitForRelayList,
   };
   const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
@@ -65,6 +69,28 @@ describe('useNostrPublish — waits for the account relay list', () => {
       );
     });
     expect(signEvent).not.toHaveBeenCalled();
+    expect(event).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing if another account (its list already loaded) became active while signing', async () => {
+    signEvent.mockClear();
+    event.mockClear();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    let active = ME;
+    signEvent.mockImplementationOnce(async (t: object) => {
+      active = 'b'.repeat(64); // the switch happens while the signer works
+      return { ...t, id: 'id', pubkey: ME, sig: 'sig' };
+    });
+    const result = setup(
+      async () => ({ relays: [], updatedAt: 0 }),
+      (pubkey) => pubkey === active
+    );
+    await act(async () => {
+      await expect(result.current.mutateAsync({ kind: 36669, content: 'x', tags: [] })).rejects.toBeInstanceOf(
+        RelayAccountChangedError
+      );
+    });
+    expect(signEvent).toHaveBeenCalledTimes(1);
     expect(event).not.toHaveBeenCalled();
   });
 });

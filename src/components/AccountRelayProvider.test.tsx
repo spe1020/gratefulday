@@ -16,6 +16,8 @@ const relayEvents = new Map<string, NostrEvent[]>();
 const deadRelays = new Set<string>();
 /** Every relay a per-relay read was sent to. */
 const asked: string[] = [];
+/** Pool reads (the journal queries): who they were for, and where they went. */
+const reads: { authors: string[]; relays: string[] }[] = [];
 
 vi.mock('@nostrify/nostrify', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@nostrify/nostrify')>();
@@ -25,7 +27,8 @@ vi.mock('@nostrify/nostrify', async (importOriginal) => {
       constructor(private opts: PoolOptions) {
         pools.push(opts);
       }
-      async query(): Promise<NostrEvent[]> {
+      async query(filters: NostrFilter[]): Promise<NostrEvent[]> {
+        reads.push({ authors: filters.flatMap((f) => f.authors ?? []), relays: [...(await this.opts.reqRouter(filters)).keys()] });
         return [];
       }
       async *req(filters: NostrFilter[], opts?: { relays?: string[] }) {
@@ -57,6 +60,7 @@ import { AppProvider } from './AppProvider';
 import { AccountRelayProvider } from './AccountRelayProvider';
 import { NostrSync } from './NostrSync';
 import { useAppContext } from '@/hooks/useAppContext';
+import { useGratitudeEntries } from '@/hooks/useGratitudeEntries';
 import { RelayListContext, type RelayListContextType } from '@/contexts/RelayListContext';
 import type { AppConfig, AppContextType } from '@/contexts/AppContext';
 import {
@@ -108,6 +112,12 @@ function Capture() {
   return null;
 }
 
+/** The journal, as the calendar reads it for the active account. */
+function Journal() {
+  useGratitudeEntries(useContext(RelayListContext)?.activePubkey);
+  return null;
+}
+
 function Tree() {
   return (
     <AppProvider storageKey={STORAGE_KEY} defaultConfig={defaultConfig}>
@@ -116,6 +126,7 @@ function Tree() {
           <NostrProvider>
             <NostrSync defaultRelays={defaultRelays} />
             <Capture />
+            <Journal />
           </NostrProvider>
         </AccountRelayProvider>
       </QueryClientProvider>
@@ -139,6 +150,7 @@ beforeEach(() => {
   relayEvents.clear();
   deadRelays.clear();
   asked.length = 0;
+  reads.length = 0;
   logins = [];
   localStorage.removeItem(STORAGE_KEY);
   localStorage.removeItem(ACCOUNT_RELAYS_KEY);
@@ -162,6 +174,20 @@ describe('relay list per account', () => {
     expect(await readRoutes()).toEqual(allDefaults);
     expect(await writeRoutes()).toEqual(allDefaults);
     expect(app.config.relayMetadata.relays.map((r) => r.url)).not.toContain(C_RELAY);
+  });
+
+  it("B's first journal read after a switch from C never goes to C's relays", async () => {
+    relayEvents.set(DEFAULT_A, [relayList(C, C_RELAY, 100)]);
+    logins = [{ pubkey: C }];
+    const { rerender } = render(<Tree />);
+    await waitFor(() => expect(gate.status).toBe('resolved'));
+    await waitFor(() => expect(reads.some((r) => r.authors.includes(C) && r.relays.includes(C_RELAY))).toBe(true));
+
+    signIn(B, rerender);
+    await waitFor(() => expect(reads.some((r) => r.authors.includes(B))).toBe(true));
+    const first = reads.find((r) => r.authors.includes(B))!;
+    expect(first.relays).not.toContain(C_RELAY);
+    expect(first.relays.sort()).toEqual(allDefaults);
   });
 
   it("switching straight from C to B drops C's list at once", async () => {
@@ -217,6 +243,8 @@ describe('relay list per account', () => {
     const waiting = gate.waitForRelayList(C);
     signIn(B, rerender);
     await expect(waiting).rejects.toBeInstanceOf(RelayAccountChangedError);
+    expect(gate.isActive(C)).toBe(false);
+    expect(gate.isActive(B)).toBe(true);
   });
 
   it("an incomplete lookup is not 'no list': writes stay blocked", async () => {

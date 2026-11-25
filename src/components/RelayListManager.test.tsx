@@ -20,6 +20,7 @@ function renderWith(status: RelayListStatus) {
     status,
     waitForRelayList: vi.fn(),
     resolveRelayList: vi.fn(),
+    isActive: () => true,
   };
   render(
     <RelayListContext.Provider value={value}>

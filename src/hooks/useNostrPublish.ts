@@ -2,7 +2,7 @@ import { useNostr } from "@nostrify/react";
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 
 import { useCurrentUser } from "./useCurrentUser";
-import { useRelayListGate } from "./useRelayListGate";
+import { useAssertStillActive, useRelayListGate } from "./useRelayListGate";
 
 import type { NostrEvent, NostrSigner } from "@nostrify/nostrify";
 
@@ -41,6 +41,7 @@ export function useNostrPublish(): UseMutationResult<NostrEvent> {
   const { nostr } = useNostr();
   const { user } = useCurrentUser();
   const waitForRelayList = useRelayListGate();
+  const assertStillActive = useAssertStillActive();
 
   return useMutation({
     mutationFn: async (t: Omit<NostrEvent, 'id' | 'pubkey' | 'sig'>) => {
@@ -62,6 +63,11 @@ export function useNostrPublish(): UseMutationResult<NostrEvent> {
           tags,
           created_at: t.created_at ?? Math.floor(Date.now() / 1000),
         });
+
+        // Signing can take seconds. If another account became active
+        // meanwhile, the pool would route this event to that account's
+        // relays: refuse instead (fail closed, nothing is sent).
+        assertStillActive(user.pubkey);
 
         await nostr.event(event, { signal: AbortSignal.timeout(5000) });
         return event;

@@ -97,6 +97,7 @@ describe('useEntryBaseCheck — per-account relays', () => {
       activePubkey: ME,
       status: 'unresolved',
       resolveRelayList: vi.fn(),
+    isActive: () => true,
       waitForRelayList: vi.fn(async () => {
         await ready;
         return { relays: [{ url: 'wss://own', read: true, write: true }], updatedAt: 1 };

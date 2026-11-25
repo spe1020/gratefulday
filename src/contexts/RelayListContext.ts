@@ -20,6 +20,12 @@ export interface RelayListContextType {
    */
   waitForRelayList(pubkey: string, signal?: AbortSignal): Promise<RelayMetadata>;
   /**
+   * Whether `pubkey` is the active account right now (not as of the last
+   * render). Checked after signing: a publish whose account is no longer
+   * active is refused rather than sent to the new account's relays.
+   */
+  isActive(pubkey: string): boolean;
+  /**
    * Record the lookup result for `pubkey`: its newest kind 10002 relays and
    * timestamp, or null when relays confirmed it has none. Ignored if
    * `pubkey` is no longer the active account.

@@ -13,7 +13,7 @@ vi.mock('@/hooks/useAppContext', () => ({ useAppContext: () => ({ config: { rela
 
 import { useDeleteGratitudeEntry } from './useDeleteGratitudeEntry';
 import { RelayListContext, type RelayListContextType } from '@/contexts/RelayListContext';
-import { RelayListUnresolvedError } from '@/lib/accountRelays';
+import { RelayAccountChangedError, RelayListUnresolvedError } from '@/lib/accountRelays';
 
 const ENTRY = { id: 'e1', pubkey: ME, kind: 36669, tags: [['d', '2026-11-24']] } as NostrEvent;
 
@@ -24,6 +24,7 @@ describe('useDeleteGratitudeEntry — waits for the account relay list', () => {
       activePubkey: ME,
       status: 'unresolved',
       resolveRelayList: vi.fn(),
+    isActive: () => true,
       waitForRelayList: async () => {
         throw new RelayListUnresolvedError();
       },
@@ -39,6 +40,36 @@ describe('useDeleteGratitudeEntry — waits for the account relay list', () => {
       await expect(result.current.mutateAsync(ENTRY)).rejects.toBeInstanceOf(RelayListUnresolvedError);
     });
     expect(signEvent).not.toHaveBeenCalled();
+    expect(event).not.toHaveBeenCalled();
+  });
+
+  it('sends no deletion if another account became active while signing', async () => {
+    signEvent.mockClear();
+    event.mockClear();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    let active = ME;
+    signEvent.mockImplementationOnce(async (t: object) => {
+      active = 'b'.repeat(64);
+      return { ...t, id: 'del', pubkey: ME, sig: 'sig' };
+    });
+    const relayList: RelayListContextType = {
+      activePubkey: ME,
+      status: 'resolved',
+      resolveRelayList: vi.fn(),
+      isActive: (pubkey) => pubkey === active,
+      waitForRelayList: async () => ({ relays: [], updatedAt: 0 }),
+    };
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <RelayListContext.Provider value={relayList}>{children}</RelayListContext.Provider>
+      </QueryClientProvider>
+    );
+    const { result } = renderHook(() => useDeleteGratitudeEntry(), { wrapper });
+    await act(async () => {
+      await expect(result.current.mutateAsync(ENTRY)).rejects.toBeInstanceOf(RelayAccountChangedError);
+    });
+    expect(signEvent).toHaveBeenCalledTimes(1);
     expect(event).not.toHaveBeenCalled();
   });
 });

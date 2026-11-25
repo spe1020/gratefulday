@@ -120,9 +120,11 @@ export function AccountRelayProvider({ children, defaultRelays }: AccountRelayPr
     []
   );
 
+  const isActive = useCallback((pubkey: string) => current.current.activePubkey === pubkey, []);
+
   const relayList = useMemo<RelayListContextType>(
-    () => ({ activePubkey, status, waitForRelayList, resolveRelayList }),
-    [activePubkey, status, waitForRelayList, resolveRelayList]
+    () => ({ activePubkey, status, waitForRelayList, resolveRelayList, isActive }),
+    [activePubkey, status, waitForRelayList, resolveRelayList, isActive]
   );
 
   const { updateConfig: parentUpdateConfig } = parent;

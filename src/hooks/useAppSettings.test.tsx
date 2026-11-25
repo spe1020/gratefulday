@@ -812,7 +812,8 @@ describe('useAppSettings — per-account relays', () => {
       relays: [{ url: 'wss://own', read: true, write: true }],
       updatedAt: 1,
     }));
-    const value = { activePubkey: 'pk-self', status: 'resolved' as const, resolveRelayList: vi.fn(), waitForRelayList };
+    const value = { activePubkey: 'pk-self', status: 'resolved' as const, resolveRelayList: vi.fn(),
+    isActive: () => true, waitForRelayList };
     const withRelays = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={client}>
         <RelayListContext.Provider value={value}>{children}</RelayListContext.Provider>
