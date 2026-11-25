@@ -947,6 +947,27 @@ describe('DayDetailDialog — account switch while a draft is open', () => {
     for (const content of savedContents()) expect(content).not.toContain("A's private words");
   });
 
+  // Pins the effect order (Audit Low on #50): with B's day already cached
+  // there is no loading render, so the owner reset must run before seeding in
+  // the same commit, or seeding takes A's draft and the reset then blanks B's day.
+  it("shows B's saved day, without A's draft, when B's day is already cached", async () => {
+    const view = render(<DayDetailDialog day={day} open onOpenChange={() => {}} />);
+    fireEvent.change(screen.getByTestId('editor'), { target: { value: "A's private words" } });
+
+    mockUser.mockReturnValue({ user: userB });
+    mockExistingEntry.mockReturnValue({ data: { ...encryptedEntry, id: 'b-entry', pubkey: userB.pubkey, tags: [['d', day.dateString]] }, isPending: false, isFetching: false });
+    mockDecrypted.mockReturnValue({ content: "B's saved words", isEncrypted: false, isDecrypting: false, decryptError: null });
+    view.rerender(<DayDetailDialog day={day} open onOpenChange={() => {}} />);
+    view.rerender(<DayDetailDialog day={day} open onOpenChange={() => {}} />);
+
+    expect(screen.queryByDisplayValue("A's private words")).not.toBeInTheDocument();
+    expect(screen.getByText("B's saved words")).toBeVisible();
+    const save = screen.queryByRole('button', { name: /save entry/i });
+    if (save && !save.hasAttribute('disabled')) fireEvent.click(save);
+    await act(async () => {});
+    for (const content of savedContents()) expect(content).not.toContain("A's private words");
+  });
+
   it("does not carry A's draft to B through a signed-out moment", async () => {
     const view = render(<DayDetailDialog day={day} open onOpenChange={() => {}} />);
     fireEvent.change(screen.getByTestId('editor'), { target: { value: "A's private words" } });
