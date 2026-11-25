@@ -839,6 +839,21 @@ describe('DayDetailDialog — base-version check before save', () => {
     expect(toast.mock.calls.find(([t]) => /couldn't save right now/i.test(t.title))![0].variant).toBeUndefined();
   });
 
+  it('says the account changed when that is why the save was refused', async () => {
+    const { RelayAccountChangedError } = await import('@/lib/accountRelays');
+    checkEntryBase.mockImplementation(() => Promise.reject(new RelayAccountChangedError()));
+    await editAndClick(/save entry/i);
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          description: 'Nothing was saved, because the signed-in account changed. Your notes are still here.',
+        })
+      )
+    );
+    expect(publish).not.toHaveBeenCalled();
+    expect(screen.getByTestId('editor')).toHaveValue('morning walk, and coffee');
+  });
+
   it('a conflict also blocks Share: no 36669 and no kind 1', async () => {
     checkEntryBase.mockImplementation(() => Promise.resolve('conflict'));
     await editAndClick(/share to nostr/i);

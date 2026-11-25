@@ -47,8 +47,15 @@ import type { NostrEvent, NostrSigner } from '@nostrify/nostrify';
 import { dedupeEntriesByDTag } from '@/lib/streakUtils';
 import { joinNotes, normalizeNotes, splitNotes } from '@/lib/entryNotes';
 import { useToast } from '@/hooks/useToast';
+import { RelayAccountChangedError, RelayListUnresolvedError } from '@/lib/accountRelays';
 import LoginDialog from './auth/LoginDialog';
 import { nip19 } from 'nostr-tools';
+
+/** Prep (#44): a save that waited while the signed-in account changed. */
+const ACCOUNT_CHANGED_NOT_SAVED =
+  'Nothing was saved, because the signed-in account changed. Your notes are still here.';
+const RELAYS_DID_NOT_ANSWER =
+  "Not enough of your relays answered to be sure this wouldn't replace newer writing. Check your connection and try again.";
 
 interface DayDetailDialogProps {
   day: DayInfo | null;
@@ -546,6 +553,9 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
       return `Your signer did not respond. ${kept} Check your signer app and try again.`;
     }
 
+    if (error instanceof RelayAccountChangedError) return ACCOUNT_CHANGED_NOT_SAVED;
+    if (error instanceof RelayListUnresolvedError) return `${kept} ${RELAYS_DID_NOT_ANSWER}`;
+
     // Publishing uses Promise.any across relays, so this only happens when
     // EVERY relay rejected.
     if (error instanceof AggregateError) {
@@ -590,10 +600,13 @@ export function DayDetailDialog({ day, open, onOpenChange, focusWisdom = false }
         variant: 'destructive',
       });
       return false;
-    } catch {
+    } catch (error) {
       toast({
         title: "Couldn't save right now",
-        description: `${kept} Not enough of your relays answered to be sure this wouldn't replace newer writing. Check your connection and try again.`,
+        description:
+          error instanceof RelayAccountChangedError
+            ? ACCOUNT_CHANGED_NOT_SAVED
+            : `${kept} ${RELAYS_DID_NOT_ANSWER}`,
       });
       return false;
     } finally {

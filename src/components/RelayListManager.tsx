@@ -188,6 +188,12 @@ export function RelayListManager() {
 
   return (
     <div className="space-y-4">
+      {loading && (
+        <p className="text-sm text-muted-foreground" role="status" data-testid="relays-loading">
+          Loading your relays… You can edit them once they've loaded.
+        </p>
+      )}
+
       {/* Relay List */}
       <div className="space-y-2">
         {relays.map((relay) => (
