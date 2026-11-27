@@ -21,7 +21,7 @@ A replaceable event that stores a user's gratitude reflection for a specific day
 #### Tags
 
 - `d` (required): Date identifier in YYYY-MM-DD format (e.g., "2024-12-06")
-- `published_at` (required): Unix timestamp when the entry was created
+- `published_at` (required): Unix timestamp of the start (local midnight) of the entry's day, not the time it was saved (`src/components/DayDetailDialog.tsx:507`); the save time is the event's `created_at`
 - `day` (required): Day of year (1-365/366)
 - `alt` (required): Human-readable description for NIP-31 compatibility. On public entries it is `Daily reflection entry for <Weekday, Month D> (Day N)`, with the date in en-US and no year (built in `src/components/DayDetailDialog.tsx:520` with `formatDisplayDate`, `src/lib/gratitudeUtils.ts:133`). On private entries it is the fixed text `Encrypted gratitude journal entry`, so it reveals nothing about the content.
 - `encrypted` (private entries only): `["encrypted", "nip44"]`. An entry is private if and only if it carries this tag; clients must not guess privacy from the shape of the content.
@@ -34,7 +34,7 @@ The `content` field holds all of the user's notes for that day in one event. It 
 - **Reading:** normalize `\r\n` and lone `\r` to `\n`, split on one or more blank lines (lines holding only spaces or tabs count as blank), trim each note and drop empty ones.
 - **Empty content** is never published.
 - **Public entries** carry this plain text as-is.
-- **Private entries** carry the same plain text encrypted with NIP-44 (version 2) to the author's own key, so only the author can read it. The tags above stay unencrypted, so the date, day of year, publish time and the fact that the entry is private are visible to anyone who can read the relay.
+- **Private entries** carry the same plain text encrypted with NIP-44 (version 2) to the author's own key, so only the author can read it. The tags above stay unencrypted, so the entry's date (`d`, `day` and `published_at`), the save time (`created_at`) and the fact that the entry is private are visible to anyone who can read the relay.
 
 #### Example Event
 
