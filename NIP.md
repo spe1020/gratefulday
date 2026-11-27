@@ -23,7 +23,7 @@ A replaceable event that stores a user's gratitude reflection for a specific day
 - `d` (required): Date identifier in YYYY-MM-DD format (e.g., "2024-12-06")
 - `published_at` (required): Unix timestamp when the entry was created
 - `day` (required): Day of year (1-365/366)
-- `alt` (required): Human-readable description for NIP-31 compatibility. On private entries it is the fixed text `Encrypted gratitude journal entry`, so it reveals nothing about the content.
+- `alt` (required): Human-readable description for NIP-31 compatibility. On public entries it is `Daily reflection entry for <Weekday, Month D> (Day N)`, with the date in en-US and no year (built in `src/components/DayDetailDialog.tsx:520` with `formatDisplayDate`, `src/lib/gratitudeUtils.ts:133`). On private entries it is the fixed text `Encrypted gratitude journal entry`, so it reveals nothing about the content.
 - `encrypted` (private entries only): `["encrypted", "nip44"]`. An entry is private if and only if it carries this tag; clients must not guess privacy from the shape of the content.
 
 #### Content
@@ -46,7 +46,7 @@ The `content` field holds all of the user's notes for that day in one event. It 
     ["d", "2024-12-06"],
     ["published_at", "1733529600"],
     ["day", "341"],
-    ["alt", "Daily gratitude entry for December 6, 2024 (Day 341)"]
+    ["alt", "Daily reflection entry for Friday, December 6 (Day 341)"]
   ],
   "created_at": 1733529600,
   "pubkey": "...",
